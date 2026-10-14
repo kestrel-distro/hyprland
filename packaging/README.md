@@ -32,9 +32,10 @@ cd packaging/local
 makepkg -s -f --noconfirm --nocheck
 ```
 
-The recipe builds this fork's own tree. Packages are named `hyprland` to match
-Arch, with `pkgrel` above Arch's so the build wins in the ISO build-time
-repository; a later Arch bump takes over on `pacman -Syu`.
+The recipe builds this fork's own tree. The package is named
+`hyprland-kestrel`, and conflicts with/replaces/provides `hyprland`, so Arch's
+stock package can never install or overwrite it; updates come only from the
+Kestrel `[kestrel]` repository. The installed binary and files are unchanged.
 
 | Variable | Default | Meaning |
 |---|---|---|

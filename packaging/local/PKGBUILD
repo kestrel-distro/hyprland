@@ -4,18 +4,18 @@
 # ThinLTO, x86-64-v3, no hyprpm. The source-level Kestrel change (LTO enabled)
 # lives in the tree; this recipe compiles it.
 #
-# The package name matches Arch's on purpose, so a rolling `pacman -Syu` takes
-# over on the next upstream bump instead of orphaning the package. pkgrel sits
-# above Arch's current one (4 at time of writing) so this build wins inside the
-# ISO's build-time repository.
+# The package is named hyprland-kestrel and conflicts/replaces/provides the Arch
+# package, so Arch's stock hyprland can never install or overwrite it. Updates
+# come only from the Kestrel [kestrel] repository. The installed binary and
+# files are the same, so nothing else changes.
 #
 # Build options:
 #   _kestrel_march   x86-64-v3 (default); x86-64-v4 or native to retarget
 #   _kestrel_lto     thin (default) | none
 
-pkgname=hyprland
+pkgname=hyprland-kestrel
 pkgver=0.56.2
-pkgrel=5
+pkgrel=1
 pkgdesc='a highly customizable dynamic tiling Wayland compositor'
 arch=(x86_64)
 url="https://github.com/hyprwm/Hyprland"
@@ -76,22 +76,24 @@ makedepends=(cmake
              xorgproto)
 optdepends=('hyprshutdown: clean logout and shutdown helper'
             'xdg-desktop-portal-hyprland: xdg-desktop-portal backend for hyprland')
-provides=(wayland-compositor)
+provides=(hyprland wayland-compositor)
+conflicts=(hyprland)
+replaces=(hyprland)
 options=(!debug)
 
 : "${_kestrel_march:=x86-64-v3}"
 : "${_kestrel_lto:=thin}"
 
-source=("$pkgname::git+https://github.com/kestrel-distro/hyprland.git")
+source=("hyprland::git+https://github.com/kestrel-distro/hyprland.git")
 sha256sums=('SKIP')
 
 pkgver() {
-	cd "$pkgname"
+	cd hyprland
 	git describe --long --tags --abbrev=7 | sed 's/^v//;s/\([^-]*-g\)/r\1/;s/-/./g'
 }
 
 build() {
-	cd "$pkgname"
+	cd hyprland
 	# Clang's -mtune rejects x86-64-v3; -march alone targets the baseline.
 	local _flags="-march=${_kestrel_march}"
 	local _cmake=(
@@ -114,7 +116,7 @@ build() {
 }
 
 package() {
-	cd "$pkgname"
+	cd hyprland
 	DESTDIR="$pkgdir" cmake --install build
 	rm -fv "$pkgdir/usr/include/hyprland/src/version.h.in"
 	find "$pkgdir" -name '*hyprpm*' -delete
