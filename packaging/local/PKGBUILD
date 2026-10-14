@@ -96,6 +96,14 @@ pkgver() {
 	git describe --long --tags --abbrev=7 | sed 's/^v//;s/\([^-]*-g\)/r\1/;s/-/./g'
 }
 
+prepare() {
+	cd hyprland
+	# makepkg's git source does not fetch submodules; Hyprland vendors udis86 in
+	# subprojects/udis86, which the CMake build requires when the system udis86
+	# is absent.
+	git submodule update --init --recursive
+}
+
 build() {
 	cd hyprland
 	# Clang's -mtune rejects x86-64-v3; -march alone targets the baseline.
