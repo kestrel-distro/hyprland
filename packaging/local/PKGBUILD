@@ -1,0 +1,122 @@
+# Maintainer: Kestrel <https://github.com/kestrel-distro>
+#
+# Lean Hyprland build for Kestrel, built from this fork's own tree. Clang,
+# ThinLTO, x86-64-v3, no hyprpm. The source-level Kestrel change (LTO enabled)
+# lives in the tree; this recipe compiles it.
+#
+# The package name matches Arch's on purpose, so a rolling `pacman -Syu` takes
+# over on the next upstream bump instead of orphaning the package. pkgrel sits
+# above Arch's current one (4 at time of writing) so this build wins inside the
+# ISO's build-time repository.
+#
+# Build options:
+#   _kestrel_march   x86-64-v3 (default); x86-64-v4 or native to retarget
+#   _kestrel_lto     thin (default) | none
+
+pkgname=hyprland
+pkgver=0.56.2
+pkgrel=5
+pkgdesc='a highly customizable dynamic tiling Wayland compositor'
+arch=(x86_64)
+url="https://github.com/hyprwm/Hyprland"
+license=(BSD-3-Clause)
+depends=(cairo # libcairo.so
+         aquamarine libaquamarine.so
+         libgcc # libgcc_s.so
+         'libstdc++' # libstdc++.so
+         glibc # libc.so libm.so
+         glib2 libgio-2.0.so libgobject-2.0.so
+         glslang # libglslang-default-resource-limits.so libglslang.so
+         hyprcursor libhyprcursor.so
+         hyprgraphics libhyprgraphics.so
+         hyprland-guiutils
+         hyprlang libhyprlang.so
+         hyprutils libhyprutils.so
+         hyprwire libhyprwire.so
+         lcms2 liblcms2.so
+         libdrm # libdrm.so
+         libglvnd libEGL.so libGLESv2.so
+         libinput # libinput.so
+         libx11
+         libxcb # libxcb-dri3.so libxcb-present.so libxcb-render.so libxcb-res.so libxcb-shm.so libxcb.so libxcb-xfixes.so libxcb-xinput.so
+         libxcomposite # libxcb-composite.so
+         libxcursor # libXcursor.so
+         libxfixes
+         libxkbcommon libxkbcommon.so
+         libxrender
+         lua # liblua.so
+         mesa # libgbm.so
+         muparser # libmuparser.so
+         opengl-driver
+         pango libpango-1.0.so libpangocairo-1.0.so
+         pixman libpixman-1.so
+         re2 libre2.so
+         tomlplusplus libtomlplusplus.so
+         util-linux-libs libuuid.so
+         wayland libwayland-server.so
+         wayland-protocols
+         xcb-proto
+         xcb-util
+         xcb-util-errors # libxcb-errors.so
+         xcb-util-image
+         xcb-util-keysyms
+         xcb-util-renderutil # libxcb-render-util.so
+         xcb-util-wm # libxcb-ewmh.so libxcb-icccm.so
+         xorg-xwayland)
+makedepends=(cmake
+             clang
+             glaze
+             hyprland-protocols
+             hyprwayland-scanner
+             lld
+             llvm
+             meson
+             mold
+             ninja
+             xorgproto)
+optdepends=('hyprshutdown: clean logout and shutdown helper'
+            'xdg-desktop-portal-hyprland: xdg-desktop-portal backend for hyprland')
+provides=(wayland-compositor)
+options=(!debug)
+
+: "${_kestrel_march:=x86-64-v3}"
+: "${_kestrel_lto:=thin}"
+
+source=("$pkgname::git+https://github.com/kestrel-distro/hyprland.git")
+sha256sums=('SKIP')
+
+pkgver() {
+	cd "$pkgname"
+	git describe --long --tags --abbrev=7 | sed 's/^v//;s/\([^-]*-g\)/r\1/;s/-/./g'
+}
+
+build() {
+	cd "$pkgname"
+	# Clang's -mtune rejects x86-64-v3; -march alone targets the baseline.
+	local _flags="-march=${_kestrel_march}"
+	local _cmake=(
+		-B build -S . -G Ninja -W no-dev
+		-DCMAKE_BUILD_TYPE=Release
+		-DCMAKE_INSTALL_PREFIX=/usr
+		-DNO_HYPRPM=1
+		-DCMAKE_C_COMPILER=clang
+		-DCMAKE_CXX_COMPILER=clang++
+	)
+	if [[ "$_kestrel_lto" == "thin" ]]; then
+		_flags+=" -flto=thin"
+		_cmake+=(-DCMAKE_AR=llvm-ar -DCMAKE_RANLIB=llvm-ranlib -DCMAKE_NM=llvm-nm)
+		_cmake+=(-DCMAKE_EXE_LINKER_FLAGS="-flto=thin -fuse-ld=mold")
+		_cmake+=(-DCMAKE_SHARED_LINKER_FLAGS="-flto=thin -fuse-ld=mold")
+	fi
+	_cmake+=(-DCMAKE_C_FLAGS="$_flags" -DCMAKE_CXX_FLAGS="$_flags")
+	cmake "${_cmake[@]}"
+	cmake --build build
+}
+
+package() {
+	cd "$pkgname"
+	DESTDIR="$pkgdir" cmake --install build
+	rm -fv "$pkgdir/usr/include/hyprland/src/version.h.in"
+	find "$pkgdir" -name '*hyprpm*' -delete
+	install -Dm0644 LICENSE -t "$pkgdir/usr/share/licenses/$pkgname/"
+}
