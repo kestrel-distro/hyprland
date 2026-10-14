@@ -32,8 +32,12 @@ cd packaging/local
 makepkg -s -f --noconfirm --nocheck
 ```
 
-The recipe builds this fork's own tree. The package is named
-`hyprland-kestrel`, and conflicts with/replaces/provides `hyprland`, so Arch's
+The recipe builds the **pinned upstream release tarball** (currently `v0.56.2`),
+not this fork's `main`: tracking upstream `main` needs the matching hypr*-git
+libraries, which Kestrel does not ship, so the release is pinned to stay ABI-
+compatible with Arch's stable hyprutils/hyprlang/aquamarine. Bump `pkgver` to the
+next release that matches the Arch libraries. The package is named
+`hyprland-kestrel` and conflicts with/replaces/provides `hyprland`, so Arch's
 stock package can never install or overwrite it; updates come only from the
 Kestrel `[kestrel]` repository. The installed binary and files are unchanged.
 

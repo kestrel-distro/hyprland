@@ -1,17 +1,22 @@
 # Maintainer: Kestrel <https://github.com/kestrel-distro>
 #
-# Lean Hyprland build for Kestrel, built from this fork's own tree. Clang,
-# ThinLTO, x86-64-v3, no hyprpm. The source-level Kestrel change (LTO enabled)
-# lives in the tree; this recipe compiles it.
+# Lean Hyprland build for Kestrel: Clang, ThinLTO, x86-64-v3, no hyprpm.
+#
+# Built from the pinned upstream release tarball rather than this fork's HEAD:
+# tracking upstream `main` needs the matching hypr*-git libraries, which Kestrel
+# does not ship. Pinning the release keeps ABI compatibility with Arch's stable
+# hyprutils/hyprlang/aquamarine. To update, bump pkgver to the next release that
+# matches the Arch libraries.
 #
 # The package is named hyprland-kestrel and conflicts/replaces/provides the Arch
 # package, so Arch's stock hyprland can never install or overwrite it. Updates
 # come only from the Kestrel [kestrel] repository. The installed binary and
-# files are the same, so nothing else changes.
+# files are the same as upstream's.
 #
 # Build options:
 #   _kestrel_march   x86-64-v3 (default); x86-64-v4 or native to retarget
 #   _kestrel_lto     thin (default) | none
+#   _kestrel_pgo     no (default) | generate | use   (see packaging/PGO.md)
 
 pkgname=hyprland-kestrel
 pkgver=0.56.2
@@ -34,8 +39,6 @@ depends=(cairo # libcairo.so
          hyprutils libhyprutils.so
          hyprwire libhyprwire.so
          lcms2 liblcms2.so
-         libcanberra # libcanberra.so
-         libdisplay-info # libdisplay-info.so
          libdrm # libdrm.so
          libglvnd libEGL.so libGLESv2.so
          libinput # libinput.so
@@ -52,11 +55,7 @@ depends=(cairo # libcairo.so
          opengl-driver
          pango libpango-1.0.so libpangocairo-1.0.so
          pixman libpixman-1.so
-         polkit
          re2 libre2.so
-         sdbus-cpp # libsdbus-c++.so
-         seatd # libseat.so
-         systemd-libs # libsystemd.so
          tomlplusplus libtomlplusplus.so
          util-linux-libs libuuid.so
          wayland libwayland-server.so
@@ -89,29 +88,25 @@ options=(!debug)
 
 : "${_kestrel_march:=x86-64-v3}"
 : "${_kestrel_lto:=thin}"
-# PGO: "no" (default), "generate" for the instrumented pass, or "use" for the
-# optimized pass against a profile directory. Two-stage; see packaging/PGO.md.
 : "${_kestrel_pgo:=no}"
 : "${_kestrel_pgo_dir:=/tmp/hyprland.profdata}"
 
-source=("hyprland::git+https://github.com/kestrel-distro/hyprland.git")
-sha256sums=('SKIP')
-
-pkgver() {
-	cd hyprland
-	git describe --long --tags --abbrev=7 | sed 's/^v//;s/\([^-]*-g\)/r\1/;s/-/./g'
-}
+_archive="Hyprland-$pkgver"
+source=("$_archive.tar.gz::$url/releases/download/v$pkgver/source-v$pkgver.tar.gz")
+sha256sums=('03ad3f5ef152ff44116ffd56fcf808486211ecabf4f0ba567108ee746ba5cd2e')
 
 prepare() {
-	cd hyprland
-	# makepkg's git source does not fetch submodules; Hyprland vendors udis86 in
-	# subprojects/udis86, which the CMake build requires when the system udis86
-	# is absent.
-	git submodule update --init --recursive
+	ln -sf hyprland-source "$_archive"
+	cd "$_archive"
+	# Drop the global -fno-lto so ThinLTO can be enabled. Plugins built through
+	# hyprpm are the reason upstream disables it; Kestrel builds with NO_HYPRPM.
+	sed -i '/add_compile_options(-fno-lto)/d' CMakeLists.txt
+	# Arch's glaze is newer than the range the project pins for hyprpm.
+	sed -i -e '/find_package.glaze/s/7...<8 //' {.,hyprpm,start}/CMakeLists.txt 2>/dev/null || true
 }
 
 build() {
-	cd hyprland
+	cd "$_archive"
 	# Clang's -mtune rejects x86-64-v3; -march alone targets the baseline.
 	local _cflags="-march=${_kestrel_march}"
 	local _ldflags=""
@@ -151,7 +146,7 @@ build() {
 }
 
 package() {
-	cd hyprland
+	cd "$_archive"
 	DESTDIR="$pkgdir" cmake --install build
 	rm -fv "$pkgdir/usr/include/hyprland/src/version.h.in"
 	find "$pkgdir" -name '*hyprpm*' -delete
