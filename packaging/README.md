@@ -41,6 +41,7 @@ Kestrel `[kestrel]` repository. The installed binary and files are unchanged.
 |---|---|---|
 | `_kestrel_march` | `x86-64-v3` | CPU target; `x86-64-v4` or `native` to retarget |
 | `_kestrel_lto` | `thin` | `thin` or `none` |
+| `_kestrel_pgo` | `no` | `no`, `generate` (instrumented), or `use` (optimized); see `PGO.md` |
 
 ## Standards
 
