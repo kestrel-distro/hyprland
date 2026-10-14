@@ -34,6 +34,8 @@ depends=(cairo # libcairo.so
          hyprutils libhyprutils.so
          hyprwire libhyprwire.so
          lcms2 liblcms2.so
+         libcanberra # libcanberra.so
+         libdisplay-info # libdisplay-info.so
          libdrm # libdrm.so
          libglvnd libEGL.so libGLESv2.so
          libinput # libinput.so
@@ -50,7 +52,11 @@ depends=(cairo # libcairo.so
          opengl-driver
          pango libpango-1.0.so libpangocairo-1.0.so
          pixman libpixman-1.so
+         polkit
          re2 libre2.so
+         sdbus-cpp # libsdbus-c++.so
+         seatd # libseat.so
+         systemd-libs # libsystemd.so
          tomlplusplus libtomlplusplus.so
          util-linux-libs libuuid.so
          wayland libwayland-server.so
