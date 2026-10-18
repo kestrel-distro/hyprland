@@ -2,11 +2,12 @@
 #
 # Lean Hyprland build for Kestrel: Clang, ThinLTO, x86-64-v3, no hyprpm.
 #
-# Built from the pinned upstream release tarball rather than this fork's HEAD:
-# tracking upstream `main` needs the matching hypr*-git libraries, which Kestrel
-# does not ship. Pinning the release keeps ABI compatibility with Arch's stable
-# hyprutils/hyprlang/aquamarine. To update, bump pkgver to the next release that
-# matches the Arch libraries.
+# Built from this fork at the pinned release branch kestrel/0.56.2 (tag v0.56.2
+# plus Kestrel source changes), not upstream `main`: main needs the matching
+# hypr*-git libraries, which Kestrel does not ship. Pinning the release keeps ABI
+# compatibility with Arch's stable hyprutils/hyprlang/aquamarine. To update,
+# branch kestrel/<ver> from the new upstream tag, adapt Kestrel's changes onto
+# it, then bump pkgver and _kestrel_branch below.
 #
 # The package is named hyprland-kestrel and conflicts/replaces/provides the Arch
 # package, so Arch's stock hyprland can never install or overwrite it. Updates
@@ -70,6 +71,7 @@ depends=(cairo # libcairo.so
          xorg-xwayland)
 makedepends=(cmake
              clang
+             git
              glaze
              hyprland-protocols
              hyprwayland-scanner
@@ -91,13 +93,15 @@ options=(!debug)
 : "${_kestrel_pgo:=no}"
 : "${_kestrel_pgo_dir:=/tmp/hyprland.profdata}"
 
-_archive="Hyprland-$pkgver"
-source=("$_archive.tar.gz::$url/releases/download/v$pkgver/source-v$pkgver.tar.gz")
-sha256sums=('03ad3f5ef152ff44116ffd56fcf808486211ecabf4f0ba567108ee746ba5cd2e')
+_kestrel_branch="kestrel/0.56.2"
+_archive="hyprland"
+source=("$_archive::git+https://github.com/kestrel-distro/hyprland.git#branch=$_kestrel_branch")
+sha256sums=('SKIP')
 
 prepare() {
-	ln -sf hyprland-source "$_archive"
 	cd "$_archive"
+	# The release tarball bundles these; a git checkout does not.
+	git submodule update --init --recursive
 	# Drop the global -fno-lto so ThinLTO can be enabled. Plugins built through
 	# hyprpm are the reason upstream disables it; Kestrel builds with NO_HYPRPM.
 	sed -i '/add_compile_options(-fno-lto)/d' CMakeLists.txt
