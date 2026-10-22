@@ -6,9 +6,12 @@
 #include "init/initHelpers.hpp"
 #include "ipc/s1/S1.hpp"
 #include "helpers/env/Env.hpp"
+#include "kestrel/KestrelHint.hpp"
 
 #include <csignal>
 #include <cstdio>
+#include <chrono>
+#include <thread>
 #include <hyprutils/string/String.hpp>
 #include <hyprutils/memory/Casts.hpp>
 #include <print>
@@ -287,6 +290,15 @@ int main(int argc, char** argv) {
         LOG(Log::WARN, "WARNING: Hyprland is being launched without start-hyprland. This is highly advised against.");
 
     g_pCompositor->initServer(socketName, socketFd);
+
+    // Tell scx_kestrel this is the compositor (hint 1). A no-op on a stock
+    // kernel. Re-applied once after startup so threads created during
+    // compositor init are covered too.
+    KestrelHint::setProcess(1);
+    std::thread([] {
+        std::this_thread::sleep_for(std::chrono::seconds(2));
+        KestrelHint::setProcess(1);
+    }).detach();
 
     if (verifyConfig) {
         const auto verify = Config::mgr()->configVerifPassed();
