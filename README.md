@@ -1,3 +1,20 @@
+# Kestrel fork: `hyprland-kestrel`
+
+Kestrel ships its own Hyprland build. It is compiled from `packaging/local`
+with `-march=x86-64-v3` and ThinLTO, packaged under a distinct
+`hyprland-kestrel` name that `conflicts`/`replaces`/`provides` `hyprland`, and
+served from the Kestrel `[kestrel]` repository. The installed desktop never
+mixes it with Arch's build.
+
+The Kestrel defaults — Lua configuration, keybindings, look, monitor handling
+and the desktop-specific app rules — live in
+[`kestrel-distro/kestrel/default/hypr`](https://github.com/kestrel-distro/kestrel/tree/main/default/hypr)
+and are versioned with the payload, not in this fork.
+
+Upstream Hyprland README follows.
+
+---
+
 <div align = center>
 
 <img src="https://raw.githubusercontent.com/hyprwm/Hyprland/main/assets/header.svg" width="750" height="300" alt="banner">
