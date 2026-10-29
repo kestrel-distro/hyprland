@@ -95,13 +95,19 @@ options=(!debug)
 
 _kestrel_branch="kestrel/0.56.2"
 _archive="hyprland"
-source=("$_archive::git+https://github.com/kestrel-distro/hyprland.git#branch=$_kestrel_branch")
-sha256sums=('SKIP')
+source=("$_archive::git+https://github.com/kestrel-distro/hyprland.git#branch=$_kestrel_branch"
+        "0001-kestrel-sched-hint.patch")
+sha256sums=('SKIP'
+            'SKIP')
 
 prepare() {
 	cd "$_archive"
 	# The release tarball bundles these; a git checkout does not.
 	git submodule update --init --recursive
+	# The release branch predates the Kestrel scheduling hint.
+	if ! grep -q KestrelHint src/main.cpp; then
+		git apply "$srcdir/0001-kestrel-sched-hint.patch"
+	fi
 	# Drop the global -fno-lto so ThinLTO can be enabled. Plugins built through
 	# hyprpm are the reason upstream disables it; Kestrel builds with NO_HYPRPM.
 	sed -i '/add_compile_options(-fno-lto)/d' CMakeLists.txt
@@ -112,8 +118,8 @@ prepare() {
 build() {
 	cd "$_archive"
 	# Clang's -mtune rejects x86-64-v3; -march alone targets the baseline.
-	local _cflags="-march=${_kestrel_march}"
-	local _ldflags=""
+	local _cflags="$CFLAGS -march=${_kestrel_march}"
+	local _ldflags="$LDFLAGS"
 	if [[ "$_kestrel_lto" == "thin" ]]; then
 		_cflags+=" -flto=thin"
 		_ldflags+=" -flto=thin -fuse-ld=mold"

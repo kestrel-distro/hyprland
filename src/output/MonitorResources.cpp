@@ -28,9 +28,13 @@ CMonitorResources::CMonitorResources(WP<CMonitor> monitor, DRMFormat format, Vec
                 buffer->addStencil(m_stencilTex);
             return buffer;
         },
-        prepareWorkBufferRelease, std::numeric_limits<uint64_t>::max()),
+        prepareWorkBufferRelease, 128ULL * 1024ULL * 1024ULL),
     m_sizedWorkBuffers([this] { return g_pHyprRenderer->createFB(std::format("Monitor {} sized workbuffer", m_monitor->m_name)); }, prepareWorkBufferRelease) {
-    initFB(m_blurFB);
+    static auto PBLURENABLED = CConfigValue<Config::BOOL>("decoration:blur:enabled");
+    if (*PBLURENABLED)
+        initFB(m_blurFB);
+    else
+        m_blurFB->alloc(1, 1, m_drmFormat);
     monitor->m_blurFBDirty = true;
     m_sceneResources       = makeShared<Render::CSceneResources>(monitor);
 }

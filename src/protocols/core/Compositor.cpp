@@ -18,6 +18,7 @@
 #include "../../state/MonitorState.hpp"
 #include "protocols/types/SurfaceRole.hpp"
 #include "render/Texture.hpp"
+#include <atomic>
 #include <cstring>
 
 using namespace NColorManagement;
@@ -43,8 +44,26 @@ class CDefaultSurfaceRole : public ISurfaceRole {
     }
 };
 
+static std::atomic<size_t> s_pendingFrameCallbacks{0};
+
+void CWLSurfaceResource::frameCallbackAdded() {
+    s_pendingFrameCallbacks.fetch_add(1, std::memory_order_relaxed);
+}
+
+void CWLSurfaceResource::frameCallbackRemoved() {
+    s_pendingFrameCallbacks.fetch_sub(1, std::memory_order_relaxed);
+}
+
+size_t CWLSurfaceResource::pendingFrameCallbacks() {
+    return s_pendingFrameCallbacks.load(std::memory_order_relaxed);
+}
+
 CWLCallbackResource::CWLCallbackResource(SP<CWlCallback>&& resource_) : m_resource(std::move(resource_)) {
     ;
+}
+
+CWLCallbackResource::~CWLCallbackResource() {
+    CWLSurfaceResource::frameCallbackRemoved();
 }
 
 bool CWLCallbackResource::good() {
@@ -284,6 +303,7 @@ CWLSurfaceResource::CWLSurfaceResource(SP<CWlSurface> resource_) : m_resource(re
     m_resource->setFrame([this](CWlSurface* r, uint32_t id) {
         m_pending.updated.bits.frame = true;
         m_pending.callbacks.emplace_back(makeShared<CWLCallbackResource>(makeShared<CWlCallback>(m_client, 1, id)));
+        CWLSurfaceResource::frameCallbackAdded();
     });
 
     m_resource->setOffset([this](CWlSurface* r, int32_t x, int32_t y) {

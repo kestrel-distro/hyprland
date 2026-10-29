@@ -15,7 +15,13 @@ _kestrel_pgo=generate _kestrel_pgo_dir=/tmp/hyprland.profdata \
 
 Install the result and use the desktop normally for a while, so the profile
 reflects real use (window create/move/focus, workspaces, fullscreen video).
-The raw profiles land in `_kestrel_pgo_dir`.
+The raw profiles land in `_kestrel_pgo_dir`. Merge them into the file Clang
+reads on the second pass:
+
+```
+llvm-profdata merge -o /tmp/hyprland.profdata/default.profdata \
+  /tmp/hyprland.profdata/*.profraw
+```
 
 ## 2. Optimized pass
 

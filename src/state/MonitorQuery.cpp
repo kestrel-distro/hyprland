@@ -1,6 +1,7 @@
 #include "MonitorQuery.hpp"
 #include "MonitorQueryCore.hpp"
 #include "MonitorStateTracker.hpp"
+#include "../helpers/MiscFunctions.hpp"
 
 #include <utility>
 #include <vector>
@@ -62,6 +63,27 @@ CMonitorQuery&& CMonitorQuery::includeDisabled(bool inc) && {
 }
 
 PHLMONITOR CMonitorQuery::run() && {
+    if (m_vec && !m_id && !m_name && !m_desc && !m_str && !m_configString && !m_output && !m_relativeTo && !m_dir) {
+        PHLMONITOR closest;
+        float      closestDistance = 0.F;
+
+        for (const auto& m : mons()) {
+            if (m->logicalBox().containsPoint(*m_vec))
+                return m;
+        }
+
+        for (const auto& m : mons()) {
+            const auto  BOX      = m->logicalBox();
+            const float DISTANCE = vecToRectDistanceSquared(*m_vec, BOX.pos(), BOX.pos() + BOX.size());
+            if (!closest || DISTANCE < closestDistance) {
+                closest         = m;
+                closestDistance = DISTANCE;
+            }
+        }
+
+        return closest;
+    }
+
     std::vector<SP<Monitor::IMonitorQueryable>> queryableMonitors;
     queryableMonitors.reserve(mons().size());
     for (const auto& m : mons()) {

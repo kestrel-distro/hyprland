@@ -90,7 +90,6 @@ extern "C" {
 
 static int cursorTicker(void* data) {
     g_pHyprRenderer->ensureCursorRenderingMode();
-    wl_event_source_timer_update(g_pHyprRenderer->m_cursorTicker, 500);
     return 0;
 }
 
@@ -674,9 +673,12 @@ void IHyprRenderer::renderWindow(CRenderContext& ctx, PHLWINDOW pWindow, PHLMONI
         UP<CScopeGuard> passRedirect;
         const bool      windowBlur         = renderdata.blur;
         const bool      windowBlurUsesLive = windowBlur && !shouldUseNewBlurOptimizations(ctx, nullptr, pWindow);
-        const auto      backdropScope      = makeShared<SBackdropScope>();
+        SP<SBackdropScope> backdropScope;
 
-        addPassElement(ctx, makeUnique<CBackdropScopePassElement>(CBackdropScopePassElement::eAction::BEGIN, backdropScope));
+        if (windowBlur) {
+            backdropScope = makeShared<SBackdropScope>();
+            addPassElement(ctx, makeUnique<CBackdropScopePassElement>(CBackdropScopePassElement::eAction::BEGIN, backdropScope));
+        }
 
         if (TRANSFORMEDWINDOW) {
             transformedPass = makeUnique<CRenderPass>();
@@ -788,7 +790,8 @@ void IHyprRenderer::renderWindow(CRenderContext& ctx, PHLWINDOW pWindow, PHLMONI
             renderdata.blur = windowBlur;
         }
 
-        addPassElement(ctx, makeUnique<CBackdropScopePassElement>(CBackdropScopePassElement::eAction::END, backdropScope));
+        if (windowBlur)
+            addPassElement(ctx, makeUnique<CBackdropScopePassElement>(CBackdropScopePassElement::eAction::END, backdropScope));
     }
 
     ctx.m_data.clipBox = CBox();
@@ -2731,6 +2734,9 @@ void IHyprRenderer::renderWorkspace(CRenderContext& ctx, PHLWORKSPACE workspace,
 }
 
 void IHyprRenderer::sendFrameEventsToWorkspace(PHLMONITOR pMonitor, PHLWORKSPACE pWorkspace, const Time::steady_tp& now) {
+    if (CWLSurfaceResource::pendingFrameCallbacks() == 0)
+        return;
+
     for (const auto& view : Desktop::View::getViewsForWorkspace(pWorkspace)) {
         if (!view->mapped() || !view->acceptsInput() || !view->resource())
             continue;
@@ -3142,6 +3148,9 @@ void IHyprRenderer::ensureCursorRenderingMode() {
     static auto PHIDEONTOUCH   = CConfigValue<Config::INTEGER>("cursor:hide_on_touch");
     static auto PHIDEONTABLET  = CConfigValue<Config::INTEGER>("cursor:hide_on_tablet");
     static auto PHIDEONKEY     = CConfigValue<Config::INTEGER>("cursor:hide_on_key_press");
+
+    if (m_cursorTicker)
+        wl_event_source_timer_update(m_cursorTicker, *PCURSORTIMEOUT > 0 ? 500 : 0);
 
     if (*PCURSORTIMEOUT <= 0)
         m_cursorHiddenConditions.hiddenOnTimeout = false;

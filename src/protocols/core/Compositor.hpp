@@ -38,7 +38,7 @@ class CContentType;
 class CWLCallbackResource {
   public:
     CWLCallbackResource(SP<CWlCallback>&& resource_);
-    ~CWLCallbackResource() noexcept = default;
+    ~CWLCallbackResource();
     // disable copy
     CWLCallbackResource(const CWLCallbackResource&)            = delete;
     CWLCallbackResource& operator=(const CWLCallbackResource&) = delete;
@@ -74,6 +74,9 @@ class CWLSurfaceResource {
     ~CWLSurfaceResource();
 
     static SP<CWLSurfaceResource> fromResource(wl_resource* res);
+    static void                   frameCallbackAdded();
+    static void                   frameCallbackRemoved();
+    static size_t                 pendingFrameCallbacks();
 
     bool                          good();
     wl_client*                    client();
