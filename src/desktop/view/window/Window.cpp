@@ -21,6 +21,7 @@
 #include "WindowGroupMembership.hpp"
 #include "WindowMetadata.hpp"
 #include "WindowPresentation.hpp"
+#include "WindowStateTracker.hpp"
 #include "WindowSwallowController.hpp"
 #include "../LayerSurface.hpp"
 #include "../Popup.hpp"
@@ -55,6 +56,7 @@
 #include "../../../helpers/Color.hpp"
 #include "../../../helpers/math/Expression.hpp"
 #include "../../../render/Renderer.hpp"
+#include "../../../render/scene/SceneSelection.hpp"
 #include "../../../ipc/s2/S2.hpp"
 #include "../../../managers/input/InputManager.hpp"
 #include "../../../pointer/PointerController.hpp"
@@ -152,7 +154,7 @@ void CWindow::attachBackendListeners() {
 CWindow::CWindow(UP<IWindowBackend> backend) :
     IView(CWLSurface::create()), m_grouping(makeUnique<CWindowGroupMembership>(*this)), m_swallowing(makeUnique<CWindowSwallowController>(*this)),
     m_fullscreenPolicy(makeUnique<CWindowFullscreenPolicy>()), m_backend(std::move(backend)), m_metadata(makeUnique<CWindowMetadata>()),
-    m_presentation(makeUnique<CWindowPresentation>(*this)), m_effects(makeUnique<CWindowEffectsController>(*this)) {
+    m_presentation(makeUnique<CWindowPresentation>(*this)), m_effects(makeUnique<CWindowEffectsController>(*this)), m_stateTracker(makeUnique<CWindowStateEventTracker>(*this)) {
     ;
 }
 
@@ -239,7 +241,7 @@ bool CWindow::desktopComponent() const {
 }
 
 std::optional<CBox> CWindow::surfaceLogicalBox() const {
-    if (!mapped() || !acceptsInput() || !alphaNonZero())
+    if (!mapped() || !acceptsInput())
         return std::nullopt;
 
     return getWindowMainSurfaceBox();
@@ -867,9 +869,10 @@ void CWindow::requestClientFullscreen(const SClientFullscreenRequest& request) {
         }
 
         if (m_isMapped) {
-            if (request.fullscreen.value())
-                Fullscreen::controller()->setFullscreenMode(m_self.lock(), std::nullopt, Fullscreen::FSMODE_FULLSCREEN);
-            else {
+            if (request.fullscreen.value()) {
+                static auto PCLIENTREQFSHANDLER = CConfigValue<Config::BOOL>("binds:client_requested_fs_uses_layout_handler");
+                Fullscreen::controller()->setFullscreenMode(m_self.lock(), std::nullopt, Fullscreen::FSMODE_FULLSCREEN, *PCLIENTREQFSHANDLER);
+            } else {
                 // If window's fullscreen, un-fullscreen it. if it's not FS, let it keep its current FS mode
                 if (Fullscreen::controller()->getFullscreenModes(m_self.lock()).client == Fullscreen::FSMODE_FULLSCREEN)
                     Fullscreen::controller()->setFullscreenMode(m_self.lock(), std::nullopt, Fullscreen::FSMODE_NONE);
@@ -885,7 +888,7 @@ void CWindow::requestClientFullscreen(const SClientFullscreenRequest& request) {
             if (!BACKEND_REQUEST || !m_fullscreenPolicy->consumeExpectedMaximizeEcho(request.maximized.value())) {
                 const auto WINDOW       = m_self.lock();
                 const auto CLIENT_STATE = Fullscreen::controller()->getFullscreenModes(WINDOW).client;
-                if (request.maximized.value())
+                if (request.maximized.value() && CLIENT_STATE != Fullscreen::FSMODE_FULLSCREEN)
                     Fullscreen::controller()->setFullscreenMode(WINDOW, std::nullopt, Fullscreen::FSMODE_MAXIMIZED);
                 else if (CLIENT_STATE == Fullscreen::FSMODE_MAXIMIZED)
                     Fullscreen::controller()->setFullscreenMode(WINDOW, std::nullopt, Fullscreen::FSMODE_NONE);
@@ -1593,7 +1596,9 @@ void CWindow::mapWindow() {
     if (m_workspace)
         m_workspace->updateWindows();
 
+    m_stateTracker->start();
     Event::bus()->m_events.window.openLate.emit(m_self.lock());
+    PWORKSPACE->ready();
 }
 
 void CWindow::unmapWindow() {
@@ -1612,6 +1617,7 @@ void CWindow::unmapWindow() {
 
     const auto PMONITOR = m_monitor.lock();
 
+    m_stateTracker->stop();
     m_events.unmap.emit();
     IPC::Socket2::sock()->postEvent({"closewindow", std::format("{:x}", m_self.lock())});
     Event::bus()->m_events.window.close.emit(m_self.lock());
@@ -1634,9 +1640,10 @@ void CWindow::unmapWindow() {
     // Allow the renderer to catch the last frame.
     const auto SNAPSHOT =
         g_pHyprRenderer->shouldRenderWindow(m_self.lock()) && !m_ruleApplicator->noAnim().valueOrDefault() ? g_pHyprRenderer->makeSnapshotFB(m_self.lock()) : nullptr;
+    const auto WORKSPACE_SNAPSHOT = !m_ruleApplicator->noAnim().valueOrDefault() ? g_pHyprRenderer->makeSnapshotFB(m_self.lock(), Render::eSceneMode::WORKSPACE_WINDOWS) : nullptr;
 
-    bool      wasLastWindow = WAS_FOCUSED;
-    PHLWINDOW nextInGroup   = RESTORED_SWALLOW_WINDOW ? RESTORED_SWALLOW_WINDOW : [this] -> PHLWINDOW {
+    bool       wasLastWindow = WAS_FOCUSED;
+    PHLWINDOW  nextInGroup   = RESTORED_SWALLOW_WINDOW ? RESTORED_SWALLOW_WINDOW : [this] -> PHLWINDOW {
         if (!m_grouping->group())
             return nullptr;
 
@@ -1734,7 +1741,7 @@ void CWindow::unmapWindow() {
     m_realSize->setConfig(Config::animationTree()->getAnimationPropertyConfig("windowsOut"));
     m_presentation->alpha(WINDOW_ALPHA_FADE)->setConfig(Config::animationTree()->getAnimationPropertyConfig("fadeOut"));
 
-    Desktop::fadingOutState()->add(CWindowFadeout::create(m_self.lock(), SNAPSHOT, FADEOUTALPHA));
+    Desktop::fadingOutState()->add(CWindowFadeout::create(m_self.lock(), SNAPSHOT, FADEOUTALPHA, WORKSPACE_SNAPSHOT));
 
     // recheck idle inhibitors
     g_pInputManager->recheckIdleInhibitorStatus();
@@ -1795,7 +1802,7 @@ void CWindow::commitWindow(bool initialCommit) {
 
     // tearing: if solitary, redraw it. This still might be a single surface window
     if (PMONITOR && PMONITOR->m_solitaryClient.lock() == m_self.lock() && canBeTorn() && PMONITOR->m_tearingState.canTear && wlSurface()->resource()->m_current.texture &&
-        !PMONITOR->isTearingBlocked() && HADDAMAGE) {
+        HADDAMAGE) {
 
         if (PMONITOR->m_tearingState.busy)
             PMONITOR->m_tearingState.frameScheduledWhileBusy = true;
@@ -1809,6 +1816,7 @@ void CWindow::commitWindow(bool initialCommit) {
 void CWindow::destroyWindow() {
     LOG(Log::DEBUG, "{:c} destroyed, queueing.", m_self.lock());
 
+    m_stateTracker->stop();
     m_swallowing->onDestroy();
 
     if (m_self.lock() == Desktop::focusState()->window()) {
@@ -1957,6 +1965,10 @@ CWindowGroupMembership& CWindow::grouping() {
 
 const CWindowGroupMembership& CWindow::grouping() const {
     return *m_grouping;
+}
+
+CWindowStateEventTracker& CWindow::stateTracker() {
+    return *m_stateTracker;
 }
 
 void CWindow::sendClose() {

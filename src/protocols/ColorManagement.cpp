@@ -457,6 +457,9 @@ CColorManagementFeedbackSurface::CColorManagementFeedbackSurface(SP<CWpColorMana
 }
 
 void CColorManagementFeedbackSurface::onPreferredChanged() {
+    if (m_surface.expired())
+        return;
+
     if (m_surface->m_enteredOutputs.size() == 1) {
         const auto newId = m_surface->getPreferredImageDescription()->id();
         if (m_currentPreferredId != newId) {
@@ -841,13 +844,13 @@ CColorManagementImageDescriptionInfo::CColorManagementImageDescriptionInfo(SP<CW
                                       m_settings.masteringPrimaries.blue.x != 0 || m_settings.masteringPrimaries.blue.y != 0) ?
         m_settings.masteringPrimaries :
         m_settings.primaries;
-
+    // clang-format off
     m_resource->sendTargetPrimaries(                                        //
         toProto(targetPrimaries.red.x), toProto(targetPrimaries.red.y),     //
         toProto(targetPrimaries.green.x), toProto(targetPrimaries.green.y), //
         toProto(targetPrimaries.blue.x), toProto(targetPrimaries.blue.y),   //
         toProto(targetPrimaries.white.x), toProto(targetPrimaries.white.y));
-
+    // clang-format on
     if (m_settings.masteringLuminances.max > 0)
         m_resource->sendTargetLuminance(std::round(m_settings.masteringLuminances.min * 10000), m_settings.masteringLuminances.max);
     else
@@ -892,14 +895,17 @@ void CColorManagementProtocol::onImagePreferredChanged(uint32_t preferredId) {
     }
 }
 
+void CColorManagementProtocol::recheckFeedbacks() {
+    for (auto const& feedback : m_feedbackSurfaces)
+        feedback->onPreferredChanged();
+}
+
 void CColorManagementProtocol::onMonitorImageDescriptionChanged(PHLMONITORREF monitor) {
     for (auto const& output : m_outputs) {
         if (output->m_output && output->m_output->m_monitor == monitor)
             output->m_resource->sendImageDescriptionChanged();
     }
-    // recheck feedbacks
-    for (auto const& feedback : m_feedbackSurfaces)
-        feedback->onPreferredChanged();
+    recheckFeedbacks();
 }
 
 bool CColorManagementProtocol::isClientCMAware(wl_client* client) {

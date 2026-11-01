@@ -11,8 +11,10 @@
 #include "OpenGL.hpp"
 #include "../desktop/view/window/WindowPresentation.hpp"
 #include "Renderer.hpp"
+#include "SceneResources.hpp"
 #include "../Compositor.hpp"
 #include "../helpers/MiscFunctions.hpp"
+#include "../helpers/Format.hpp"
 #include "../helpers/CursorShapes.hpp"
 #include "../helpers/TransferFunction.hpp"
 #include "../config/ConfigValue.hpp"
@@ -562,6 +564,10 @@ void CHyprOpenGLImpl::initDRMFormats() {
     dmaFormats.reserve(formats.size());
 
     for (auto const& fmt : formats) {
+        // Do not advertise YUV until the renderer supports it.
+        if (NFormatUtils::isFormatYUV(fmt))
+            continue;
+
         std::vector<uint64_t> mods;
         if (!DISABLE_MODS) {
             auto ret = getModsForFormat(fmt);
@@ -1294,22 +1300,26 @@ void CHyprOpenGLImpl::passCMUniforms(WP<CShader> shader, const NColorManagement:
     if (!targetImageDescription->value().icc.present) {
         const auto cacheKey = std::pair{imageDescription->id(), targetImageDescription->id()};
         if (!primariesConversionCache.contains(cacheKey)) {
-            const auto&                  mat             = settings.convertMatrix;
+            const auto& mat = settings.convertMatrix;
+            // clang-format off
             const std::array<GLfloat, 9> glConvertMatrix = {
                 mat[0][0], mat[1][0], mat[2][0], //
                 mat[0][1], mat[1][1], mat[2][1], //
                 mat[0][2], mat[1][2], mat[2][2], //
             };
+            // clang-format on
             primariesConversionCache.emplace(cacheKey, glConvertMatrix);
         }
         shader->setUniformMatrix3fv(SHADER_CONVERT_MATRIX, 1, false, primariesConversionCache[cacheKey]);
 
-        const auto                   mat                  = settings.dstPrimaries2XYZ;
+        const auto mat = settings.dstPrimaries2XYZ;
+        // clang-format off
         const std::array<GLfloat, 9> glTargetPrimariesXYZ = {
             mat[0][0], mat[1][0], mat[2][0], //
             mat[0][1], mat[1][1], mat[2][1], //
             mat[0][2], mat[1][2], mat[2][2], //
         };
+        // clang-format on
         shader->setUniformMatrix3fv(SHADER_TARGET_PRIMARIES_XYZ, 1, false, glTargetPrimariesXYZ);
     } else {
         // TODO: this sucks
@@ -1435,7 +1445,7 @@ WP<CShader> CHyprOpenGLImpl::renderToFBInternal(CRenderContext& ctx, SP<ITexture
         shaderFeatures &= ~SH_FEAT_RGBA;
 
     const auto surface                       = ctx.m_data.surface;
-    const auto WORK_BUFFER_IMAGE_DESCRIPTION = ctx.m_data.pMonitor->workBufferImageDescription();
+    const auto WORK_BUFFER_IMAGE_DESCRIPTION = g_pHyprRenderer->workBufferImageDescription(ctx);
 
     // chosenSdrEotf contains the valid eotf for this display
 
@@ -1481,6 +1491,9 @@ WP<CShader> CHyprOpenGLImpl::renderToFBInternal(CRenderContext& ctx, SP<ITexture
     if (data.blur && data.blurredBG && data.blurAlphaMatte && (*PBLEND || data.forceBlurBlend))
         shaderFeatures |= SH_FEAT_BLUR_MATTE;
 
+    if (data.blurProportional)
+        shaderFeatures |= SH_FEAT_BLUR_PROPORTIONAL;
+
     if (data.forceBlurBlend)
         shaderFeatures |= SH_FEAT_BLUR_ALPHA_MASK;
 
@@ -1490,8 +1503,9 @@ WP<CShader> CHyprOpenGLImpl::renderToFBInternal(CRenderContext& ctx, SP<ITexture
     if (data.discardActive)
         shaderFeatures |= SH_FEAT_DISCARD;
 
-    const bool skipCM = !*PENABLECM || !m_cmSupported                   /* CM unsupported or disabled */
-        || ctx.m_data.pMonitor->doesNoShaderCM()                        /* no shader needed */
+    const bool EXPLICIT_SCENE = ctx.sceneResources() && ctx.sceneResources()->bufferDescription().has_value();
+    const bool skipCM         = !*PENABLECM || !m_cmSupported           /* CM unsupported or disabled */
+        || (!EXPLICIT_SCENE && ctx.m_data.pMonitor->doesNoShaderCM())   /* monitor-only optimization */
         || !SOURCE_IMAGE_DESCRIPTION->needsCM(TARGET_IMAGE_DESCRIPTION) /* Source and target have matching image descriptions */
         ;
 
@@ -1867,6 +1881,7 @@ void CHyprOpenGLImpl::renderTextureWithBlurInternal(CRenderContext& ctx, SP<ITex
 
     TRACY_GPU_ZONE("RenderTextureWithBlur");
 
+    static auto PPROPORTIONAL = CConfigValue<Config::INTEGER>("decoration:blur:proportional");
     static auto PBLEND        = CConfigValue<Config::INTEGER>("render:use_shader_blur_blend");
     const auto  NEEDS_STENCIL = data.discardMode != 0 && (!data.blockBlurOptimization || (data.discardMode & DISCARD_ALPHA));
     const bool  SHADERBLEND   = *PBLEND || data.forceBlurBlend;
@@ -1963,23 +1978,24 @@ void CHyprOpenGLImpl::renderTextureWithBlurInternal(CRenderContext& ctx, SP<ITex
     // draw window
     renderTextureInternal(ctx, tex, box,
                           STextureRenderData{
-                              .blur           = SHADERBLEND,
-                              .blurredBG      = data.blurredBG,
-                              .blurAlphaMatte = data.blurAlphaMatte,
-                              .damage         = data.damage,
-                              .a              = data.a * data.overallA,
-                              .round          = data.round,
-                              .roundingPower  = data.roundingPower,
-                              .discardActive  = SHADERBLEND && NEEDS_STENCIL,
-                              .allowCustomUV  = true,
-                              .allowDim       = true,
-                              .noAA           = false,
-                              .wrapX          = data.wrapX,
-                              .wrapY          = data.wrapY,
-                              .discardMode    = data.discardMode,
-                              .discardOpacity = data.discardOpacity,
-                              .clipRegion     = data.clipRegion,
-                              .currentLS      = data.currentLS,
+                              .blur             = SHADERBLEND,
+                              .blurredBG        = data.blurredBG,
+                              .blurAlphaMatte   = data.blurAlphaMatte,
+                              .damage           = data.damage,
+                              .a                = data.a * data.overallA,
+                              .round            = data.round,
+                              .roundingPower    = data.roundingPower,
+                              .blurProportional = *PPROPORTIONAL,
+                              .discardActive    = SHADERBLEND && NEEDS_STENCIL,
+                              .allowCustomUV    = true,
+                              .allowDim         = true,
+                              .noAA             = false,
+                              .wrapX            = data.wrapX,
+                              .wrapY            = data.wrapY,
+                              .discardMode      = data.discardMode,
+                              .discardOpacity   = data.discardOpacity,
+                              .clipRegion       = data.clipRegion,
+                              .currentLS        = data.currentLS,
 
                               .primarySurfaceUVTopLeft     = ctx.m_data.primarySurfaceUVTopLeft,
                               .primarySurfaceUVBottomRight = ctx.m_data.primarySurfaceUVBottomRight,

@@ -3,16 +3,12 @@
 #include "../../../helpers/memory/Memory.hpp"
 #include "../../../helpers/math/Math.hpp"
 #include "../../../layout/algorithm/TiledAlgorithm.hpp"
+#include "../LuaRef.hpp"
 
 #include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
-
-extern "C" {
-#include <lua.h>
-#include <lauxlib.h>
-}
 
 namespace Config::Lua {
     class CConfigManager;
@@ -22,11 +18,10 @@ namespace Config::Lua::Layouts {
 
     struct SLuaLayoutProvider {
         CConfigManager* manager = nullptr;
-        lua_State*      state   = nullptr;
         std::string     name;
-        int             tableRef = LUA_NOREF;
-        bool            active   = true;
-        bool            didError = false;
+        std::string     recalculateContext;
+        std::string     layoutMsgContext;
+        CLuaRef         table; // empty once the provider is unregistered
     };
 
     class CLuaTiledAlgorithm : public Layout::ITiledAlgorithm {
@@ -53,7 +48,6 @@ namespace Config::Lua::Layouts {
         std::vector<SP<Layout::ITarget>> liveTargets();
         bool                             callRecalculate(const std::vector<SP<Layout::ITarget>>& targets);
         void                             applyDefaultGrid(const std::vector<SP<Layout::ITarget>>& targets);
-        void                             reportError(const std::string& message);
     };
 
 }

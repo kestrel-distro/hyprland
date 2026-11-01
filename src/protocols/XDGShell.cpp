@@ -2,6 +2,7 @@
 #include "XDGDialog.hpp"
 #include <algorithm>
 #include "../Compositor.hpp"
+#include "../helpers/string/StringUtils.hpp"
 #include "../managers/SeatManager.hpp"
 #include "../managers/eventLoop/EventLoopManager.hpp"
 #include "../output/Monitor.hpp"
@@ -9,6 +10,7 @@
 #include "core/Compositor.hpp"
 #include "../desktop/DesktopTypes.hpp"
 #include "../desktop/view/window/Window.hpp"
+#include "../desktop/view/window/WindowStateTracker.hpp"
 #include "../desktop/view/window/WaylandBackend.hpp"
 #include "protocols/core/Output.hpp"
 #include <cstddef>
@@ -73,6 +75,8 @@ CXDGPopupResource::CXDGPopupResource(SP<CXdgPopup> resource_, SP<CXDGSurfaceReso
         if (!pos)
             return;
         m_positionerRules = CXDGPositionerRules{pos};
+        if (m_surface && m_surface->m_surface)
+            m_surface->m_surface->m_pending.updated.bits.xdgPopup = true;
         m_events.reposition.emit();
     });
 
@@ -182,11 +186,13 @@ CXDGToplevelResource::CXDGToplevelResource(SP<CXdgToplevel> resource_, SP<CXDGSu
 
     m_resource->setSetTitle([this](CXdgToplevel* r, const char* t) {
         m_state.title = t;
+        StringUtils::truncUTF8InPlace(m_state.title);
         m_events.metadataChanged.emit();
     });
 
     m_resource->setSetAppId([this](CXdgToplevel* r, const char* id) {
         m_state.appid = id;
+        StringUtils::truncUTF8InPlace(m_state.appid);
         m_events.metadataChanged.emit();
     });
 
@@ -354,8 +360,10 @@ void CXDGToplevelResource::setNewParent(SP<CXDGToplevelResource> newParent) {
     m_parent = newParent;
     if (m_parent) {
         m_parent->m_children.emplace_back(m_self);
-        if (m_parent->m_window && (m_parent->m_window->m_state & Desktop::View::WINDOW_STATE_PINNED))
+        if (m_parent->m_window && (m_parent->m_window->m_state & Desktop::View::WINDOW_STATE_PINNED)) {
             m_self->m_window->m_state |= Desktop::View::WINDOW_STATE_PINNED;
+            m_self->m_window->stateTracker().scheduleUpdate();
+        }
     }
     LOG(Log::DEBUG, "Toplevel {:x} sets parent to {:x}{}", (uintptr_t)this, (uintptr_t)newParent.get(), (oldParent ? std::format(" (was {:x})", (uintptr_t)oldParent.get()) : ""));
 }

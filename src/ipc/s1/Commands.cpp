@@ -46,6 +46,7 @@ using namespace Hyprutils::String;
 #include "../../devices/ITouch.hpp"
 #include "../../devices/Tablet.hpp"
 #include "../../protocols/GlobalShortcuts.hpp"
+#include "../../hotkeys/Manager.hpp"
 #include "../../debug/log/RollingLogFollow.hpp"
 #include "../../config/ConfigManager.hpp"
 #include "../../helpers/MiscFunctions.hpp"
@@ -274,9 +275,19 @@ std::string CCommandFormatter::getMonitorData(PHLMONITOR m, eHyprCtlOutputFormat
     }}
 }},)#",
 
-            m->m_id, escapeJSONStrings(m->m_name), escapeJSONStrings(m->m_shortDescription), escapeJSONStrings(m->m_output->make), escapeJSONStrings(m->m_output->model),
-            escapeJSONStrings(m->m_output->serial), sc<int>(m->m_pixelSize.x), sc<int>(m->m_pixelSize.y), sc<int>(m->m_output->physicalSize.x),
-            sc<int>(m->m_output->physicalSize.y), m->m_refreshRate, sc<int>(m->m_position.x), sc<int>(m->m_position.y),
+            m->m_id,
+            escapeJSONStrings(m->m_name),
+            escapeJSONStrings(m->m_shortDescription),
+            escapeJSONStrings(m->m_output->make),
+            escapeJSONStrings(m->m_output->model),
+            escapeJSONStrings(m->m_output->serial),
+            sc<int>(m->m_pixelSize.x),
+            sc<int>(m->m_pixelSize.y),
+            sc<int>(m->m_output->physicalSize.x),
+            sc<int>(m->m_output->physicalSize.y),
+            m->m_refreshRate,
+            sc<int>(m->m_position.x),
+            sc<int>(m->m_position.y),
             escapeJSONStrings(m->m_activeWorkspace ? m->m_activeWorkspace->addressableName() : ""),
             (m->m_activeWorkspace && m->m_activeWorkspace->numberedID() ? std::format("\n        \"id\": {},", *m->m_activeWorkspace->numberedID()) : ""),
             (m->m_activeWorkspace ? Workspace::workspaceTypeToString(m->m_activeWorkspace->type()) : ""),
@@ -284,14 +295,32 @@ std::string CCommandFormatter::getMonitorData(PHLMONITOR m, eHyprCtlOutputFormat
             escapeJSONStrings(m->m_activeSpecialWorkspace ? m->m_activeSpecialWorkspace->addressableName() : ""),
             (m->m_activeSpecialWorkspace && m->m_activeSpecialWorkspace->numberedID() ? std::format("\n\t\t\"id\": {},\n", *m->m_activeSpecialWorkspace->numberedID()) : ""),
             (m->m_activeSpecialWorkspace ? Workspace::workspaceTypeToString(m->m_activeSpecialWorkspace->type()) : ""),
-            escapeJSONStrings(m->m_activeSpecialWorkspace ? m->m_activeSpecialWorkspace->displayName() : ""), sc<int>(m->m_reservedArea.left()), sc<int>(m->m_reservedArea.top()),
-            sc<int>(m->m_reservedArea.right()), sc<int>(m->m_reservedArea.bottom()), m->m_scale, sc<int>(m->m_transform), tf(m == Desktop::focusState()->monitor()),
-            tf(m->m_dpmsStatus), tf(m->m_output->state->state().adaptiveSync), rc<uint64_t>(m->m_solitaryClient.get()), getSolitaryBlockedReason(m, format),
-            tf(m->m_tearingState.activelyTearing), getTearingBlockedReason(m, format), rc<uint64_t>(m->m_lastScanout.get()), getDSBlockedReason(m, format), tf(!m->m_enabled),
-            formatToString(m->m_output->state->state().drmFormat), m->m_mirrorOf ? std::format("{}", m->m_mirrorOf->m_id) : "none", availableModesForOutput(m, format),
-            (NCMType::toString(m->m_cmType)), (m->m_sdrBrightness), (m->m_sdrSaturation), (m->m_sdrMinLuminance), (m->m_sdrMaxLuminance), tf(!m->shouldUseSoftwareCursors()),
-            StringUtils::backendStr(m->m_output->getBackend()->type()), tf(m->m_output->parsedEDID.hdrMetadata.has_value()),
-            tf(m->m_output->parsedEDID.chromaticityCoords.has_value()), tf(m->m_output->parsedEDID.supportsBT2020), tf(m->m_output->vrrCapable));
+            escapeJSONStrings(m->m_activeSpecialWorkspace ? m->m_activeSpecialWorkspace->displayName() : ""),
+            sc<int>(m->m_reservedArea.left()),
+            sc<int>(m->m_reservedArea.top()),
+            sc<int>(m->m_reservedArea.right()),
+            sc<int>(m->m_reservedArea.bottom()),
+            m->m_scale,
+            sc<int>(m->m_transform),
+            tf(m == Desktop::focusState()->monitor()),
+            tf(m->m_dpmsStatus),
+            tf(m->m_output->state->state().adaptiveSync),
+            rc<uint64_t>(m->m_solitaryClient.get()),
+            getSolitaryBlockedReason(m, format),
+            tf(m->m_tearingState.activelyTearing),
+            getTearingBlockedReason(m, format),
+            rc<uint64_t>(m->m_lastScanout.get()),
+            getDSBlockedReason(m, format),
+            tf(!m->m_enabled),
+            formatToString(m->m_output->state->state().drmFormat),
+            m->m_mirrorOf ? std::format("{}", m->m_mirrorOf->m_id) : "none",
+            availableModesForOutput(m, format), (NCMType::toString(m->m_cmType)), (m->m_sdrBrightness), (m->m_sdrSaturation), (m->m_sdrMinLuminance), (m->m_sdrMaxLuminance),
+            tf(!m->shouldUseSoftwareCursors()),
+            StringUtils::backendStr(m->m_output->getBackend()->type()),
+            tf(m->m_output->parsedEDID.hdrMetadata.has_value()),
+            tf(m->m_output->parsedEDID.chromaticityCoords.has_value()),
+            tf(m->m_output->parsedEDID.supportsBT2020),
+            tf(m->m_output->vrrCapable));
 
     } else {
         result += std::format(
@@ -302,17 +331,44 @@ std::string CCommandFormatter::getMonitorData(PHLMONITOR m, eHyprCtlOutputFormat
             "{}\n\tcurrentFormat: {}\n\tmirrorOf: "
             "{}\n\tavailableModes: {}\n\tcolorManagementPreset: {}\n\tsdrBrightness: {}\n\tsdrSaturation: {}\n\tsdrMinLuminance: {}\n\tsdrMaxLuminance: "
             "{}\n\thardwareCursorsInUse: {}\n\thardwareDetails:\n\t\tbackend: {}\n\t\thdr: {}\n\t\tchroma: {}\n\t\tbt2020: {}\n\t\tvrrCapable: {}\n\n",
-            m->m_name, m->m_id, sc<int>(m->m_pixelSize.x), sc<int>(m->m_pixelSize.y), m->m_refreshRate, sc<int>(m->m_position.x), sc<int>(m->m_position.y), m->m_shortDescription,
-            m->m_output->make, m->m_output->model, sc<int>(m->m_output->physicalSize.x), sc<int>(m->m_output->physicalSize.y), m->m_output->serial,
-            (m->m_activeWorkspace ? m->m_activeWorkspace->addressableName() : ""), (!m->m_activeWorkspace ? "" : m->m_activeWorkspace->displayName()),
+            m->m_name,
+            m->m_id,
+            sc<int>(m->m_pixelSize.x),
+            sc<int>(m->m_pixelSize.y),
+            m->m_refreshRate,
+            sc<int>(m->m_position.x),
+            sc<int>(m->m_position.y),
+            m->m_shortDescription,
+            m->m_output->make,
+            m->m_output->model,
+            sc<int>(m->m_output->physicalSize.x),
+            sc<int>(m->m_output->physicalSize.y),
+            m->m_output->serial, (m->m_activeWorkspace ? m->m_activeWorkspace->addressableName() : ""), (!m->m_activeWorkspace ? "" : m->m_activeWorkspace->displayName()),
             (m->m_activeSpecialWorkspace ? m->m_activeSpecialWorkspace->addressableName() : ""), (m->m_activeSpecialWorkspace ? m->m_activeSpecialWorkspace->displayName() : ""),
-            sc<int>(m->m_reservedArea.left()), sc<int>(m->m_reservedArea.top()), sc<int>(m->m_reservedArea.right()), sc<int>(m->m_reservedArea.bottom()), m->m_scale,
-            sc<int>(m->m_transform), yn(m == Desktop::focusState()->monitor()), sc<int>(m->m_dpmsStatus), m->m_output->state->state().adaptiveSync,
-            rc<uint64_t>(m->m_solitaryClient.get()), getSolitaryBlockedReason(m, format), m->m_tearingState.activelyTearing, getTearingBlockedReason(m, format),
-            rc<uint64_t>(m->m_lastScanout.get()), getDSBlockedReason(m, format), !m->m_enabled, formatToString(m->m_output->state->state().drmFormat),
-            m->m_mirrorOf ? std::format("{}", m->m_mirrorOf->m_id) : "none", availableModesForOutput(m, format), (NCMType::toString(m->m_cmType)), (m->m_sdrBrightness),
-            (m->m_sdrSaturation), (m->m_sdrMinLuminance), (m->m_sdrMaxLuminance), (!m->shouldUseSoftwareCursors()), StringUtils::backendStr(m->m_output->getBackend()->type()),
-            yn(m->m_output->parsedEDID.hdrMetadata.has_value()), yn(m->m_output->parsedEDID.chromaticityCoords.has_value()), yn(m->m_output->parsedEDID.supportsBT2020),
+            sc<int>(m->m_reservedArea.left()),
+            sc<int>(m->m_reservedArea.top()),
+            sc<int>(m->m_reservedArea.right()),
+            sc<int>(m->m_reservedArea.bottom()),
+            m->m_scale,
+            sc<int>(m->m_transform),
+            yn(m == Desktop::focusState()->monitor()),
+            sc<int>(m->m_dpmsStatus),
+            m->m_output->state->state().adaptiveSync,
+            rc<uint64_t>(m->m_solitaryClient.get()),
+            getSolitaryBlockedReason(m, format),
+            m->m_tearingState.activelyTearing,
+            getTearingBlockedReason(m, format),
+            rc<uint64_t>(m->m_lastScanout.get()),
+            getDSBlockedReason(m, format),
+            !m->m_enabled,
+            formatToString(m->m_output->state->state().drmFormat),
+            m->m_mirrorOf ? std::format("{}", m->m_mirrorOf->m_id) : "none",
+            availableModesForOutput(m, format), (NCMType::toString(m->m_cmType)), (m->m_sdrBrightness), (m->m_sdrSaturation), (m->m_sdrMinLuminance), (m->m_sdrMaxLuminance),
+            (!m->shouldUseSoftwareCursors()),
+            StringUtils::backendStr(m->m_output->getBackend()->type()),
+            yn(m->m_output->parsedEDID.hdrMetadata.has_value()),
+            yn(m->m_output->parsedEDID.chromaticityCoords.has_value()),
+            yn(m->m_output->parsedEDID.supportsBT2020),
             yn(m->m_output->vrrCapable));
     }
 
@@ -437,18 +493,31 @@ std::string CCommandFormatter::getWindowData(PHLWINDOW w, eHyprCtlOutputFormat f
     "stableId": "{:x}"
 }},)#",
             rc<uintptr_t>(w.get()), (w->mapped() ? "true" : "false"), (w->isHidden() ? "true" : "false"), (VISIBLE ? "true" : "false"), (w->acceptsInput() ? "true" : "false"),
-            sc<int>(w->position(Desktop::View::IGeometric::GEOMETRIC_GOAL).x), sc<int>(w->position(Desktop::View::IGeometric::GEOMETRIC_GOAL).y),
-            sc<int>(w->size(Desktop::View::IGeometric::GEOMETRIC_GOAL).x), sc<int>(w->size(Desktop::View::IGeometric::GEOMETRIC_GOAL).y), escapeJSONStrings(WORKSPACE_ADDRESS),
-            (w->m_workspace && w->m_workspace->numberedID() ? std::format("\n        \"id\": {},", *w->m_workspace->numberedID()) : ""),
-            (w->m_workspace ? Workspace::workspaceTypeToString(w->m_workspace->type()) : ""), escapeJSONStrings(!w->m_workspace ? "" : w->m_workspace->displayName()),
-            (sc<int>(w->isFloating()) == 1 ? "true" : "false"), w->monitorID(), escapeJSONStrings(w->metadata().appID()), escapeJSONStrings(w->metadata().title()),
-            escapeJSONStrings(w->metadata().initialAppID()), escapeJSONStrings(w->metadata().initialTitle()), w->backend().pid(), (w->backend().isX11() ? "true" : "false"),
-            ((w->m_state & Desktop::View::WINDOW_STATE_PINNED) ? "true" : "false"), (w->fullscreenPolicy().pinFullscreened() ? "true" : "false"),
-            sc<uint8_t>(Fullscreen::controller()->getFullscreenModes(w).internal), sc<uint8_t>(Fullscreen::controller()->getFullscreenModes(w).client),
+            sc<int>(w->position(Desktop::View::IGeometric::GEOMETRIC_GOAL).x),
+            sc<int>(w->position(Desktop::View::IGeometric::GEOMETRIC_GOAL).y),
+            sc<int>(w->size(Desktop::View::IGeometric::GEOMETRIC_GOAL).x),
+            sc<int>(w->size(Desktop::View::IGeometric::GEOMETRIC_GOAL).y),
+            escapeJSONStrings(WORKSPACE_ADDRESS), (w->m_workspace && w->m_workspace->numberedID() ? std::format("\n        \"id\": {},", *w->m_workspace->numberedID()) : ""),
+            (w->m_workspace ? Workspace::workspaceTypeToString(w->m_workspace->type()) : ""),
+            escapeJSONStrings(!w->m_workspace ? "" : w->m_workspace->displayName()), (sc<int>(w->isFloating()) == 1 ? "true" : "false"),
+            w->monitorID(),
+            escapeJSONStrings(w->metadata().appID()),
+            escapeJSONStrings(w->metadata().title()),
+            escapeJSONStrings(w->metadata().initialAppID()),
+            escapeJSONStrings(w->metadata().initialTitle()),
+            w->backend().pid(), (w->backend().isX11() ? "true" : "false"), ((w->m_state & Desktop::View::WINDOW_STATE_PINNED) ? "true" : "false"),
+            (w->fullscreenPolicy().pinFullscreened() ? "true" : "false"),
+            sc<uint8_t>(Fullscreen::controller()->getFullscreenModes(w).internal),
+            sc<uint8_t>(Fullscreen::controller()->getFullscreenModes(w).client),
             escapeJSONStrings(Fullscreen::controller()->getFullscreenHandlerNameAsString(w)), (w->fullscreenPolicy().allowedOverFullscreen() ? "true" : "false"),
-            getGroupedData(w, format), getTagsData(w, format), rc<uintptr_t>(w->swallowing().swallowee().get()), getFocusHistoryID(w),
-            (g_pInputManager->isWindowInhibiting(w, false) ? "true" : "false"), escapeJSONStrings(METADATA.tag.value_or("")), escapeJSONStrings(METADATA.description.value_or("")),
-            escapeJSONStrings(NContentType::toString(w->getContentType())), ((w->m_hints & Desktop::View::WINDOW_HINT_TEAR) ? "true" : "false"), w->metadata().stableID());
+            getGroupedData(w, format),
+            getTagsData(w, format),
+            rc<uintptr_t>(w->swallowing().swallowee().get()),
+            getFocusHistoryID(w), (g_pInputManager->isWindowInhibiting(w, false) ? "true" : "false"),
+            escapeJSONStrings(METADATA.tag.value_or("")),
+            escapeJSONStrings(METADATA.description.value_or("")),
+            escapeJSONStrings(NContentType::toString(w->getContentType())), ((w->m_hints & Desktop::View::WINDOW_HINT_TEAR) ? "true" : "false"),
+            w->metadata().stableID());
     } else {
         return std::format(
             "Window {:x} -> {}:\n\tmapped: {}\n\thidden: {}\n\tvisible: {}\n\tacceptsInput: {}\n\tat: {},{}\n\tsize: {},{}\n\tworkspace: {} ({})\n\tfloating: {}\n\tmonitor: "
@@ -459,17 +528,41 @@ std::string CCommandFormatter::getWindowData(PHLWINDOW w, eHyprCtlOutputFormat f
             "{}\n\tinhibitingIdle: "
             "{}\n\txdgTag: "
             "{}\n\txdgDescription: {}\n\tcontentType: {}\n\ttearingHint: {}\n\tstableID: {:x}\n\n",
-            rc<uintptr_t>(w.get()), w->metadata().title(), sc<int>(w->mapped()), sc<int>(w->isHidden()), sc<int>(VISIBLE), sc<int>(w->acceptsInput()),
-            sc<int>(w->position(Desktop::View::IGeometric::GEOMETRIC_GOAL).x), sc<int>(w->position(Desktop::View::IGeometric::GEOMETRIC_GOAL).y),
-            sc<int>(w->size(Desktop::View::IGeometric::GEOMETRIC_GOAL).x), sc<int>(w->size(Desktop::View::IGeometric::GEOMETRIC_GOAL).y), WORKSPACE_ADDRESS,
-            (!w->m_workspace ? "" : w->m_workspace->displayName()), sc<int>(w->isFloating()), w->monitorID(), w->metadata().appID(), w->metadata().title(),
-            w->metadata().initialAppID(), w->metadata().initialTitle(), w->backend().pid(), sc<int>(w->backend().isX11()),
-            sc<int>(sc<bool>(w->m_state & Desktop::View::WINDOW_STATE_PINNED)), sc<int>(w->fullscreenPolicy().pinFullscreened()),
-            sc<uint8_t>(Fullscreen::controller()->getFullscreenModes(w).internal), sc<uint8_t>(Fullscreen::controller()->getFullscreenModes(w).client),
-            Fullscreen::controller()->getFullscreenHandlerNameAsString(w), sc<int>(w->fullscreenPolicy().allowedOverFullscreen()), getGroupedData(w, format),
-            getTagsData(w, format), rc<uintptr_t>(w->swallowing().swallowee().get()), getFocusHistoryID(w), sc<int>(g_pInputManager->isWindowInhibiting(w, false)),
-            METADATA.tag.value_or(""), METADATA.description.value_or(""), NContentType::toString(w->getContentType()),
-            sc<int>(sc<bool>(w->m_hints & Desktop::View::WINDOW_HINT_TEAR)), w->metadata().stableID());
+            rc<uintptr_t>(w.get()),
+            w->metadata().title(),
+            sc<int>(w->mapped()),
+            sc<int>(w->isHidden()),
+            sc<int>(VISIBLE),
+            sc<int>(w->acceptsInput()),
+            sc<int>(w->position(Desktop::View::IGeometric::GEOMETRIC_GOAL).x),
+            sc<int>(w->position(Desktop::View::IGeometric::GEOMETRIC_GOAL).y),
+            sc<int>(w->size(Desktop::View::IGeometric::GEOMETRIC_GOAL).x),
+            sc<int>(w->size(Desktop::View::IGeometric::GEOMETRIC_GOAL).y),
+            WORKSPACE_ADDRESS, (!w->m_workspace ? "" : w->m_workspace->displayName()),
+            sc<int>(w->isFloating()),
+            w->monitorID(),
+            w->metadata().appID(),
+            w->metadata().title(),
+            w->metadata().initialAppID(),
+            w->metadata().initialTitle(),
+            w->backend().pid(),
+            sc<int>(w->backend().isX11()),
+            sc<int>(sc<bool>(w->m_state & Desktop::View::WINDOW_STATE_PINNED)),
+            sc<int>(w->fullscreenPolicy().pinFullscreened()),
+            sc<uint8_t>(Fullscreen::controller()->getFullscreenModes(w).internal),
+            sc<uint8_t>(Fullscreen::controller()->getFullscreenModes(w).client),
+            Fullscreen::controller()->getFullscreenHandlerNameAsString(w),
+            sc<int>(w->fullscreenPolicy().allowedOverFullscreen()),
+            getGroupedData(w, format),
+            getTagsData(w, format),
+            rc<uintptr_t>(w->swallowing().swallowee().get()),
+            getFocusHistoryID(w),
+            sc<int>(g_pInputManager->isWindowInhibiting(w, false)),
+            METADATA.tag.value_or(""),
+            METADATA.description.value_or(""),
+            NContentType::toString(w->getContentType()),
+            sc<int>(sc<bool>(w->m_hints & Desktop::View::WINDOW_HINT_TEAR)),
+            w->metadata().stableID());
     }
 }
 
@@ -690,6 +783,9 @@ static std::string layersRequest(eHyprCtlOutputFormat format, std::string reques
 )#",
                     layerLevel);
                 for (auto const& layer : level) {
+                    // Don't add the layer prematurely, before it's mapped, cuz some of its values are only correctly resolved when it's mapped
+                    if (!layer->mapped())
+                        continue;
                     result += std::format(
                         R"#(                {{
                     "address": "0x{:x}",
@@ -733,6 +829,10 @@ static std::string layersRequest(eHyprCtlOutputFormat format, std::string reques
                 result += std::format("\tLayer level {} ({}):\n", layerLevel, levelNames[layerLevel]);
 
                 for (auto const& layer : level) {
+                    // Don't add the layer prematurely, before it's mapped, cuz some of its values are only correctly resolved when it's mapped
+                    if (!layer->mapped())
+                        continue;
+
                     result += std::format("\t\tLayer {:x}: xywh: {} {} {} {}, a: {}, namespace: {}, pid: {}\n", rc<uintptr_t>(layer.get()), layer->m_geometry.x,
                                           layer->m_geometry.y, layer->m_geometry.width, layer->m_geometry.height, std::clamp(sc<double>(layer->alpha().goal()), 0.0, 1.0),
                                           layer->m_namespace, layer->getPID());
@@ -1025,9 +1125,13 @@ static std::string rollinglogRequest(eHyprCtlOutputFormat format, std::string re
 static std::string globalShortcutsRequest(eHyprCtlOutputFormat format, std::string request) {
     std::string ret       = "";
     const auto  SHORTCUTS = PROTO::globalShortcuts->getAllShortcuts();
+    const auto  HOTKEYS   = Hotkeys::mgr()->bound();
     if (format == eHyprCtlOutputFormat::FORMAT_NORMAL) {
         for (auto const& sh : SHORTCUTS) {
             ret += std::format("{}:{} -> {}\n", sh.appid, sh.id, sh.description);
+        }
+        for (auto const& hk : HOTKEYS) {
+            ret += std::format("{}:{} -> {}\n", hk->appId(), hk->trigger().label(), hk->description());
         }
         if (ret.empty())
             ret = "none";
@@ -1040,6 +1144,17 @@ static std::string globalShortcutsRequest(eHyprCtlOutputFormat format, std::stri
     "description": "{}"
 }},)#",
                                escapeJSONStrings(std::format("{}:{}", sh.appid, sh.id)), escapeJSONStrings(sh.description));
+        }
+        for (auto const& hk : HOTKEYS) {
+            ret += std::format(R"#(
+{{
+    "name": "{}",
+    "description": "{}",
+    "app_id": "{}",
+    "trigger": "{}"
+}},)#",
+                               escapeJSONStrings(std::format("{}:{}", hk->appId(), hk->trigger().label())), escapeJSONStrings(hk->description()), escapeJSONStrings(hk->appId()),
+                               escapeJSONStrings(hk->trigger().label()));
         }
         trimTrailingComma(ret);
         ret += "]\n";
@@ -1629,58 +1744,58 @@ static std::string dispatchGetOption(eHyprCtlOutputFormat format, std::string re
 
     if (format == FORMAT_NORMAL) {
         if (TYPE == typeid(Config::INTEGER))
-            return std::format("int: {}\nset: {}", **rc<Config::INTEGER* const*>(VAL), VAR.setByUser);
+            return std::format("int: {}\nset: {}", **rc<Config::INTEGER* const*>(VAL), *VAR.setByUser);
         else if (TYPE == typeid(Config::BOOL))
-            return std::format("bool: {}\nset: {}", **rc<Config::BOOL* const*>(VAL), VAR.setByUser);
+            return std::format("bool: {}\nset: {}", **rc<Config::BOOL* const*>(VAL), *VAR.setByUser);
         else if (TYPE == typeid(Config::FLOAT))
-            return std::format("float: {:2f}\nset: {}", **rc<Config::FLOAT* const*>(VAL), VAR.setByUser);
+            return std::format("float: {:2f}\nset: {}", **rc<Config::FLOAT* const*>(VAL), *VAR.setByUser);
         else if (TYPE == typeid(Config::VEC2))
-            return std::format("vec2: [{}, {}]\nset: {}", (*rc<Config::VEC2* const*>(VAL))->x, (*rc<Config::VEC2* const*>(VAL))->y, VAR.setByUser);
+            return std::format("vec2: [{}, {}]\nset: {}", (*rc<Config::VEC2* const*>(VAL))->x, (*rc<Config::VEC2* const*>(VAL))->y, *VAR.setByUser);
         else if (TYPE == typeid(Hyprlang::VEC2))
-            return std::format("vec2: [{}, {}]\nset: {}", (*rc<Config::VEC2* const*>(VAL))->x, (*rc<Config::VEC2* const*>(VAL))->y, VAR.setByUser);
+            return std::format("vec2: [{}, {}]\nset: {}", (*rc<Config::VEC2* const*>(VAL))->x, (*rc<Config::VEC2* const*>(VAL))->y, *VAR.setByUser);
         else if (TYPE == typeid(Hyprlang::STRING))
-            return std::format("str: {}\nset: {}", *rc<Hyprlang::STRING const*>(VAL), VAR.setByUser);
+            return std::format("str: {}\nset: {}", *rc<Hyprlang::STRING const*>(VAL), *VAR.setByUser);
         else if (TYPE == typeid(Config::STRING))
-            return std::format("str: {}\nset: {}", **rc<Config::STRING* const*>(VAL), VAR.setByUser);
+            return std::format("str: {}\nset: {}", **rc<Config::STRING* const*>(VAL), *VAR.setByUser);
         else if (TYPE == typeid(void*))
-            return std::format("custom type: {}\nset: {}", rc<Config::IComplexConfigValue*>((*rc<Hyprlang::CUSTOMTYPE* const*>(VAL))->getData())->toString(), VAR.setByUser);
+            return std::format("custom type: {}\nset: {}", rc<Config::IComplexConfigValue*>((*rc<Hyprlang::CUSTOMTYPE* const*>(VAL))->getData())->toString(), *VAR.setByUser);
         else if (TYPE == typeid(Config::IComplexConfigValue))
-            return std::format("custom type: {}\nset: {}", (*rc<Config::IComplexConfigValue* const*>(VAL))->toString(), VAR.setByUser);
+            return std::format("custom type: {}\nset: {}", (*rc<Config::IComplexConfigValue* const*>(VAL))->toString(), *VAR.setByUser);
         else if (TYPE == typeid(Config::CCssGapData))
-            return std::format("css gap data: {}\nset: {}", (*rc<Config::CCssGapData* const*>(VAL))->toString(), VAR.setByUser);
+            return std::format("css gap data: {}\nset: {}", (*rc<Config::CCssGapData* const*>(VAL))->toString(), *VAR.setByUser);
         else if (TYPE == typeid(Config::CGradientValueData))
-            return std::format("gradient data: {}\nset: {}", (*rc<Config::CGradientValueData* const*>(VAL))->toString(), VAR.setByUser);
+            return std::format("gradient data: {}\nset: {}", (*rc<Config::CGradientValueData* const*>(VAL))->toString(), *VAR.setByUser);
         else if (TYPE == typeid(Config::CFontWeightConfigValueData))
-            return std::format("font weight data: {}\nset: {}", (*rc<Config::CFontWeightConfigValueData* const*>(VAL))->toString(), VAR.setByUser);
+            return std::format("font weight data: {}\nset: {}", (*rc<Config::CFontWeightConfigValueData* const*>(VAL))->toString(), *VAR.setByUser);
     } else {
         if (TYPE == typeid(Config::INTEGER))
-            return std::format(R"({{"option": "{}", "int": {}, "set": {} }})", curitem, **rc<Config::INTEGER* const*>(VAL), VAR.setByUser);
+            return std::format(R"({{"option": "{}", "int": {}, "set": {} }})", curitem, **rc<Config::INTEGER* const*>(VAL), *VAR.setByUser);
         else if (TYPE == typeid(Config::BOOL))
-            return std::format(R"({{"option": "{}", "bool": {}, "set": {} }})", curitem, (**rc<Config::BOOL* const*>(VAL)) ? "true" : "false", VAR.setByUser);
+            return std::format(R"({{"option": "{}", "bool": {}, "set": {} }})", curitem, (**rc<Config::BOOL* const*>(VAL)) ? "true" : "false", *VAR.setByUser);
         else if (TYPE == typeid(Config::FLOAT))
-            return std::format(R"({{"option": "{}", "float": {:2f}, "set": {} }})", curitem, **rc<Config::FLOAT* const*>(VAL), VAR.setByUser);
+            return std::format(R"({{"option": "{}", "float": {:2f}, "set": {} }})", curitem, **rc<Config::FLOAT* const*>(VAL), *VAR.setByUser);
         else if (TYPE == typeid(Config::VEC2))
             return std::format(R"({{"option": "{}", "vec2": [{},{}], "set": {} }})", curitem, (*rc<Config::VEC2* const*>(VAL))->x, (*rc<Config::VEC2* const*>(VAL))->y,
-                               VAR.setByUser);
+                               *VAR.setByUser);
         else if (TYPE == typeid(Hyprlang::VEC2))
             return std::format(R"({{"option": "{}", "vec2": [{},{}], "set": {} }})", curitem, (*rc<Config::VEC2* const*>(VAL))->x, (*rc<Config::VEC2* const*>(VAL))->y,
-                               VAR.setByUser);
+                               *VAR.setByUser);
         else if (TYPE == typeid(Hyprlang::STRING))
-            return std::format(R"({{"option": "{}", "str": "{}", "set": {} }})", curitem, escapeJSONStrings(*rc<Hyprlang::STRING const*>(VAL)), VAR.setByUser);
+            return std::format(R"({{"option": "{}", "str": "{}", "set": {} }})", curitem, escapeJSONStrings(*rc<Hyprlang::STRING const*>(VAL)), *VAR.setByUser);
         else if (TYPE == typeid(Config::STRING))
-            return std::format(R"({{"option": "{}", "str": "{}", "set": {} }})", curitem, **rc<Config::STRING* const*>(VAL), VAR.setByUser);
+            return std::format(R"({{"option": "{}", "str": "{}", "set": {} }})", curitem, **rc<Config::STRING* const*>(VAL), *VAR.setByUser);
         else if (TYPE == typeid(void*))
             return std::format(R"({{"option": "{}", "custom": "{}", "set": {} }})", curitem,
-                               rc<Config::IComplexConfigValue*>((*rc<Hyprlang::CUSTOMTYPE* const*>(VAL))->getData())->toString(), VAR.setByUser);
+                               rc<Config::IComplexConfigValue*>((*rc<Hyprlang::CUSTOMTYPE* const*>(VAL))->getData())->toString(), *VAR.setByUser);
         else if (TYPE == typeid(Config::IComplexConfigValue))
-            return std::format(R"({{"option": "{}", "custom": "{}", "set": {} }})", curitem, (*rc<Config::IComplexConfigValue* const*>(VAL))->toString(), VAR.setByUser);
+            return std::format(R"({{"option": "{}", "custom": "{}", "set": {} }})", curitem, (*rc<Config::IComplexConfigValue* const*>(VAL))->toString(), *VAR.setByUser);
         else if (TYPE == typeid(Config::CCssGapData))
-            return std::format(R"({{"option": "{}", "css": "{}", "set": {} }})", curitem, (*rc<Config::CCssGapData* const*>(VAL))->toString(), VAR.setByUser);
+            return std::format(R"({{"option": "{}", "css": "{}", "set": {} }})", curitem, (*rc<Config::CCssGapData* const*>(VAL))->toString(), *VAR.setByUser);
         else if (TYPE == typeid(Config::CGradientValueData))
-            return std::format(R"({{"option": "{}", "gradient": "{}", "set": {} }})", curitem, (*rc<Config::CGradientValueData* const*>(VAL))->toString(), VAR.setByUser);
+            return std::format(R"({{"option": "{}", "gradient": "{}", "set": {} }})", curitem, (*rc<Config::CGradientValueData* const*>(VAL))->toString(), *VAR.setByUser);
         else if (TYPE == typeid(Config::CFontWeightConfigValueData))
             return std::format(R"({{"option": "{}", "font_weight": "{}", "set": {} }})", curitem, (*rc<Config::CFontWeightConfigValueData* const*>(VAL))->toString(),
-                               VAR.setByUser);
+                               *VAR.setByUser);
     }
 
     return "invalid type (internal error)";

@@ -18,6 +18,7 @@
 #include "../managers/eventLoop/EventLoopManager.hpp"
 #include "../managers/SeatManager.hpp"
 #include "../helpers/env/Env.hpp"
+#include "../helpers/string/StringUtils.hpp"
 #include "../protocols/XWaylandShell.hpp"
 #include "../protocols/core/Compositor.hpp"
 #include "../desktop/state/FocusState.hpp"
@@ -224,6 +225,7 @@ void CXWM::readProp(SP<CXWaylandSurface> XSURF, uint32_t atom, xcb_get_property_
 
         if (!XSURF->m_state.appid.empty())
             XSURF->m_state.appid.pop_back();
+        StringUtils::truncUTF8InPlace(XSURF->m_state.appid);
         XSURF->m_events.metadataChanged.emit();
     };
 
@@ -232,9 +234,10 @@ void CXWM::readProp(SP<CXWaylandSurface> XSURF, uint32_t atom, xcb_get_property_
 
         if (reply->type == XCB_ATOM_NONE)
             cachedName.reset();
-        else if (reply->type == HYPRATOMS["UTF8_STRING"] || reply->type == HYPRATOMS["TEXT"] || reply->type == XCB_ATOM_STRING)
+        else if (reply->type == HYPRATOMS["UTF8_STRING"] || reply->type == HYPRATOMS["TEXT"] || reply->type == XCB_ATOM_STRING) {
             cachedName = std::string{value, valueLen};
-        else
+            StringUtils::truncUTF8InPlace(*cachedName);
+        } else
             return;
 
         XSURF->m_state.title = XSURF->m_netWmName.value_or(XSURF->m_wmName.value_or(""));
@@ -259,6 +262,12 @@ void CXWM::readProp(SP<CXWaylandSurface> XSURF, uint32_t atom, xcb_get_property_
             XSURF->m_hints.reset();
             return;
         }
+
+        // Shoutout mongoloid idiots writing Xorg for this thing and I can't even submit a patch
+        // because hurr durr you are hitler you said a bad word in 2022 you must be publicly
+        // executed waaaah
+        if (reply->value_len > XCB_ICCCM_NUM_WM_HINTS_ELEMENTS)
+            return;
 
         auto hints = makeUnique<xcb_icccm_wm_hints_t>();
         if (!xcb_icccm_get_wm_hints_from_reply(hints.get(), reply))

@@ -1,4 +1,5 @@
 #include "LuaBindingsInternal.hpp"
+#include "../LuaCaller.hpp"
 #include "Check.hpp"
 
 #include "../objects/LuaEventSubscription.hpp"
@@ -60,26 +61,6 @@ static std::expected<std::vector<std::string>, std::string> parseKeyString(std::
     return keys;
 }
 
-class CLuaBindRef {
-  public:
-    CLuaBindRef(SP<SLuaStateLifetime> lifetime, int ref) : m_lifetime(std::move(lifetime)), m_ref(ref) {
-        ;
-    }
-
-    ~CLuaBindRef() {
-        if (m_lifetime && m_lifetime->state && m_ref != LUA_NOREF && m_ref != LUA_REFNIL)
-            luaL_unref(m_lifetime->state, LUA_REGISTRYINDEX, m_ref);
-    }
-
-    int ref() const {
-        return m_ref;
-    }
-
-  private:
-    SP<SLuaStateLifetime> m_lifetime;
-    int                   m_ref = LUA_NOREF;
-};
-
 static int hlBind(lua_State* L) {
     auto* mgr = sc<CConfigManager*>(lua_touserdata(L, lua_upvalueindex(1)));
 
@@ -101,9 +82,9 @@ static int hlBind(lua_State* L) {
     if (DISPLAY_KEYS == "catchall" && mgr->m_currentSubmap.empty())
         return Internal::configError(L, "hl.bind: catchall keybinds are only allowed in submaps.");
 
-    const auto               LUA_LIFETIME = mgr->luaStateLifetime();
-    const auto               LUA_MANAGER  = Config::Lua::mgr();
-    const auto               LUA_REF      = makeShared<CLuaBindRef>(LUA_LIFETIME, luaL_ref(L, LUA_REGISTRYINDEX));
+    const auto LUA_MANAGER = Config::Lua::mgr();
+    const auto LUA_REF     = makeShared<CLuaRef>(mgr->luaStateLifetime(), L, -1);
+    lua_pop(L, 1);
 
     Keybinds::BindFlags      flags = 0;
     Keybinds::SExtraBindArgs args{
@@ -111,7 +92,7 @@ static int hlBind(lua_State* L) {
             {
                 .displayKey  = std::string{DISPLAY_KEYS},
                 .handler     = handler,
-                .argument    = std::to_string(LUA_REF->ref()),
+                .argument    = std::to_string(LUA_REF->id()),
                 .submap      = mgr->m_currentSubmap,
                 .submapReset = mgr->m_currentSubmapReset,
             },
@@ -228,17 +209,17 @@ static int hlBind(lua_State* L) {
 
     auto bind = Keybinds::CBind::make(
         std::move(*keys), flags,
-        [LUA_LIFETIME, mgr = LUA_MANAGER, LUA_REF] {
-            if (!mgr || !LUA_LIFETIME || !LUA_LIFETIME->state)
+        [mgr = LUA_MANAGER, LUA_REF] {
+            if (!mgr)
                 return Keybinds::SBindResult{.success = false, .error = "Lua keybind belongs to an expired config state"};
 
-            const auto result = mgr->callLuaFnBind(LUA_REF->ref());
-            return Keybinds::SBindResult{
-                .passEvent = result.passEvent,
-                .success   = result.success,
-                .error     = result.error,
-                .followUp  = result.requestRelease ? Keybinds::BIND_FOLLOW_UP_TRIGGER_RELEASE : Keybinds::BIND_FOLLOW_UP_NONE,
-            };
+            Keybinds::SBindResult result;
+            const auto            CALLED = mgr->caller().call(*LUA_REF, CLuaCaller::LUA_TIMEOUT_KEYBIND_CALLBACK_MS, "hl.bind callback", {},
+                                                              [&result](lua_State* L) { result = Internal::bindResultFromTable(L, -1); });
+            if (!CALLED)
+                return Keybinds::SBindResult{.success = false, .error = CALLED.error()};
+
+            return result;
         },
         std::move(args));
     if (!bind) {
@@ -271,8 +252,8 @@ static int hlDefineSubmap(lua_State* L) {
     mgr->m_currentSubmapReset = reset;
 
     lua_pushvalue(L, fnIdx);
-    if (mgr->guardedPCall(0, 0, 0, CConfigManager::LUA_TIMEOUT_DISPATCH_MS, std::format("hl.define_submap(\"{}\")", *name)) != LUA_OK) {
-        mgr->addError(std::format("hl.define_submap: error in submap \"{}\": {}", *name, lua_tostring(L, -1)));
+    if (mgr->caller().guardedPCall(L, 0, 0, 0, CLuaCaller::LUA_TIMEOUT_DISPATCH_MS, std::format("hl.define_submap(\"{}\")", *name)) != LUA_OK) {
+        mgr->addError(std::format("hl.define_submap: error in submap \"{}\": {}", *name, mgr->caller().errorToString(L, -1)));
         lua_pop(L, 1);
     }
 
@@ -348,17 +329,11 @@ static int hlDispatch(lua_State* L) {
     if (const auto result = Internal::pushDispatcherFunction(L, 1); !result)
         return Internal::configError(L, std::format("hl.dispatch: {}", result.error()));
 
-    int status = LUA_OK;
-    if (auto* mgr = CConfigManager::fromLuaState(L); mgr)
-        status = mgr->guardedPCall(0, 1, 0, CConfigManager::LUA_TIMEOUT_DISPATCH_MS, "hl.dispatch");
-    else
-        status = lua_pcall(L, 0, 1, 0);
-
-    if (status != LUA_OK) {
-        const char* err = lua_tostring(L, -1);
+    auto* caller = CLuaCaller::fromLuaState(L);
+    if (caller->guardedPCall(L, 0, 1, 0, CLuaCaller::LUA_TIMEOUT_DISPATCH_MS, "hl.dispatch") != LUA_OK) {
+        const auto ERR = caller->errorToString(L, -1);
         lua_pop(L, 1);
-        return Internal::dispatcherError(L, std::format("hl.dispatch: {}", err ? err : "unknown error"), Config::Actions::eActionErrorLevel::ERROR,
-                                         Config::Actions::eActionErrorCode::LUA_ERROR);
+        return Internal::dispatcherError(L, std::format("hl.dispatch: {}", ERR), Config::Actions::eActionErrorLevel::ERROR, Config::Actions::eActionErrorCode::LUA_ERROR);
     }
 
     if (lua_isnil(L, -1)) {
@@ -376,12 +351,8 @@ static int hlOn(lua_State* L) {
         return Internal::configError(L, std::format("on: bad argument 1: {}", evName.error()));
     luaL_checktype(L, 2, LUA_TFUNCTION);
 
-    lua_pushvalue(L, 2);
-    int        ref = luaL_ref(L, LUA_REGISTRYINDEX);
-
-    const auto handle = mgr->m_eventHandler->registerEvent(*evName, ref);
+    const auto handle = mgr->m_eventHandler->registerEvent(*evName, CLuaRef{mgr->luaStateLifetime(), L, 2});
     if (!handle.has_value()) {
-        luaL_unref(L, LUA_REGISTRYINDEX, ref);
         const auto& known = CLuaEventHandler::knownEvents();
         std::string list;
         for (const auto& e : known) {
@@ -465,42 +436,25 @@ static int hlTimer(lua_State* L) {
     else if (type != "oneshot")
         return Internal::configError(L, "hl.timer: opts.type must be \"repeat\" or \"oneshot\"");
 
-    lua_pushvalue(L, 1);
-    int  ref = luaL_ref(L, LUA_REGISTRYINDEX);
-
     auto timer = makeShared<CEventLoopTimer>(
         std::chrono::milliseconds(timeoutMs),
-        [L, ref, repeat, timeoutMs, mgr](SP<CEventLoopTimer> self, void* data) {
+        [fn = makeShared<CLuaRef>(mgr->luaStateLifetime(), L, 1), repeat, timeoutMs, mgr](SP<CEventLoopTimer> self, void* data) {
             // update repeat already so that if we call set_timeout inside
             // our timer it doesn't get overwritten
             if (repeat)
                 self->updateTimeout(std::chrono::milliseconds(timeoutMs));
 
-            lua_rawgeti(L, LUA_REGISTRYINDEX, ref);
-            int status = LUA_OK;
-            if (mgr)
-                status = mgr->guardedPCall(0, 0, 0, CConfigManager::LUA_TIMEOUT_TIMER_CALLBACK_MS, "hl.timer callback");
-            else
-                status = lua_pcall(L, 0, 0, 0);
+            mgr->caller().call(*fn, CLuaCaller::LUA_TIMEOUT_TIMER_CALLBACK_MS, "hl.timer callback");
 
-            if (status != LUA_OK) {
-                LOG(Log::ERR, "[Lua] error in timer callback: {}", lua_tostring(L, -1));
-                lua_pop(L, 1);
-            }
-
+            // drop every owner so fn is released right away
             if (!repeat) {
-                const auto HAS = std::ranges::find_if(mgr->m_luaTimers, [&self](const auto& lt) { return lt.timer == self; }) != mgr->m_luaTimers.end();
-
-                // avoid double-unref if this timer triggered a reload
-                if (HAS) {
-                    luaL_unref(L, LUA_REGISTRYINDEX, ref);
-                    std::erase_if(mgr->m_luaTimers, [&self](const auto& lt) { return lt.timer == self; });
-                }
+                std::erase(mgr->m_luaTimers, self);
+                g_pEventLoopManager->removeTimer(self);
             }
         },
         nullptr);
 
-    mgr->m_luaTimers.emplace_back(CConfigManager::SLuaTimer{timer, ref});
+    mgr->m_luaTimers.emplace_back(timer);
     if (g_pEventLoopManager)
         g_pEventLoopManager->addTimer(timer);
 

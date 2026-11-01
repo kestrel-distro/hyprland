@@ -262,7 +262,7 @@ CWLDataDeviceResource::CWLDataDeviceResource(SP<CWlDataDevice> resource_) : m_re
     });
 
     m_resource->setStartDrag([](CWlDataDevice* r, wl_resource* sourceR, wl_resource* origin, wl_resource* icon, uint32_t serial) {
-        auto source = CWLDataSourceResource::fromResource(sourceR);
+        auto source = sourceR ? CWLDataSourceResource::fromResource(sourceR) : CSharedPointer<CWLDataSourceResource>{};
         if (!source) {
             LOG(Log::ERR, "No source in drag");
             return;
@@ -578,8 +578,9 @@ void CWLDataDeviceProtocol::initiateDrag(WP<CWLDataSourceResource> currentSource
     m_dnd.originSurface = origin;
     m_dnd.dndSurface    = dragSurface;
     if (dragSurface) {
-        m_dnd.dndSurfaceDestroy = dragSurface->m_events.destroy.listen([this] { abortDrag(); });
-        m_dnd.dndSurfaceCommit  = dragSurface->m_events.commit.listen([this] {
+        dragSurface->m_pending.updated.bits.dndIcon = true;
+        m_dnd.dndSurfaceDestroy                     = dragSurface->m_events.destroy.listen([this] { abortDrag(); });
+        m_dnd.dndSurfaceCommit                      = dragSurface->m_events.commit.listen([this] {
             if (m_dnd.dndSurface->m_current.texture && !m_dnd.dndSurface->m_mapped) {
                 m_dnd.dndSurface->map();
                 return;

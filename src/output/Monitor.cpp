@@ -334,6 +334,12 @@ void CMonitor::onConnect(bool noRule) {
 
     LOG(Log::DEBUG, "Added new monitor with name {} at {:j0} with size {:j0}, pointer {:x}", m_name, m_position, m_pixelSize, rc<uintptr_t>(m_output.get()));
 
+    // Arrange monitors before handing workspaces back to this monitor. A freshly created monitor has an unset
+    // position (-1, -1) until it's arranged, and moveWorkspaceToMonitor translates floating windows relative to
+    // the target's position. CMonitor::moveTo deliberately doesn't shift windows when moving away from the unset
+    // position, so arranging afterwards would leave returning floating windows outside of the monitor.
+    State::monitorLayoutController()->arrange();
+
     if (!isMirror())
         State::Workspace::monitorConnected(m_self.lock());
 
@@ -506,14 +512,16 @@ static NColorManagement::eTransferFunction chooseTF(NTransferFunction::eTF tf) {
 }
 
 void CMonitor::applyCMType(NCMType::eCMType cmType, NTransferFunction::eTF cmSdrEotf) {
+    // SDR presets must not carry EDID HDR metadata, or clients see headroom an SDR transfer function can't encode
+    const bool                                                        hdrPreset           = cmType == NCMType::CM_HDR || cmType == NCMType::CM_HDR_EDID;
     auto                                                              oldImageDescription = m_imageDescription;
     const auto                                                        chosenSdrEotf       = chooseTF(cmSdrEotf);
 
     const auto                                                        masteringPrimaries  = getMasteringPrimaries();
-    const NColorManagement::SImageDescription::SPCMasteringLuminances masteringLuminances = getMasteringLuminances();
+    const NColorManagement::SImageDescription::SPCMasteringLuminances masteringLuminances = hdrPreset ? getMasteringLuminances() : SImageDescription::SPCMasteringLuminances{};
 
-    const auto                                                        maxFALL = this->maxFALL();
-    const auto                                                        maxCLL  = this->maxCLL();
+    const auto                                                        maxFALL = hdrPreset ? this->maxFALL() : 0;
+    const auto                                                        maxCLL  = hdrPreset ? this->maxCLL() : 0;
 
     switch (cmType) {
         case NCMType::CM_SRGB:
@@ -572,41 +580,9 @@ void CMonitor::applyCMType(NCMType::eCMType cmType, NTransferFunction::eTF cmSdr
                                                           .maxFALL             = maxFALL});
             break;
         case NCMType::CM_HDR:
-            m_imageDescription = CImageDescription::from({.transferFunction    = NColorManagement::CM_TRANSFER_FUNCTION_ST2084_PQ,
-                                                          .primariesNameSet    = true,
-                                                          .primariesNamed      = NColorManagement::CM_PRIMARIES_BT2020,
-                                                          .primaries           = NColorManagement::getPrimaries(NColorManagement::CM_PRIMARIES_BT2020),
-                                                          .masteringPrimaries  = masteringPrimaries,
-                                                          .luminances          = {.min       = DEFAULT_HDR_IMAGE_DESCRIPTION->value().getTFMinLuminance(),
-                                                                                  .max       = DEFAULT_HDR_IMAGE_DESCRIPTION->value().getTFMaxLuminance(),
-                                                                                  .reference = DEFAULT_HDR_IMAGE_DESCRIPTION->value().getTFRefLuminance()},
-                                                          .masteringLuminances = masteringLuminances,
-                                                          .maxCLL              = maxCLL,
-                                                          .maxFALL             = maxFALL});
-            break;
-        case NCMType::CM_HDR_EDID:
-            m_imageDescription = CImageDescription::from(
-                {.transferFunction = NColorManagement::CM_TRANSFER_FUNCTION_ST2084_PQ,
-                 .primariesNameSet = false,
-                 .primariesNamed   = NColorManagement::CM_PRIMARIES_BT2020,
-                 .primaries = m_output->parsedEDID.chromaticityCoords.has_value() ? masteringPrimaries : NColorManagement::getPrimaries(NColorManagement::CM_PRIMARIES_BT2020),
-                 .masteringPrimaries  = masteringPrimaries,
-                 .luminances          = {.min       = DEFAULT_HDR_IMAGE_DESCRIPTION->value().getTFMinLuminance(),
-                                         .max       = DEFAULT_HDR_IMAGE_DESCRIPTION->value().getTFMaxLuminance(),
-                                         .reference = DEFAULT_HDR_IMAGE_DESCRIPTION->value().getTFRefLuminance()},
-                 .masteringLuminances = masteringLuminances,
-                 .maxCLL              = maxCLL,
-                 .maxFALL             = maxFALL});
-
-            break;
+        case NCMType::CM_HDR_EDID: m_imageDescription = getHDRImageDescription(cmType); break;
         default: UNREACHABLE();
     }
-    if ((minLuminance() >= 0 || maxLuminance() > 0) && (cmType == NCMType::CM_HDR || cmType == NCMType::CM_HDR_EDID))
-        m_imageDescription = m_imageDescription->with({
-            .min       = minLuminance() >= 0 ? minLuminance() : m_imageDescription->value().luminances.min, //
-            .max       = maxLuminance() > 0 ? maxLuminance() : m_imageDescription->value().luminances.max,  //
-            .reference = m_imageDescription->value().luminances.reference                                   //
-        });
 
     if (oldImageDescription != m_imageDescription) {
         if (PROTO::colorManagement)
@@ -1400,10 +1376,7 @@ void CMonitor::changeWorkspace(const PHLWORKSPACE& pWorkspace, bool internal, bo
             !(Desktop::focusState()->window() && (Desktop::focusState()->window()->m_state & WINDOW_STATE_PINNED) && Desktop::focusState()->window()->m_monitor == m_self)) {
             static auto PFOLLOWMOUSE = CConfigValue<Config::INTEGER>("input:follow_mouse");
 
-            const auto  PLAST_FOCUSED_WINDOW = pWorkspace->getLastFocusedWindow();
-            const auto  PCOVERING_FS_WINDOW = Fullscreen::controller()->hasFullscreen(pWorkspace, true) ? Fullscreen::controller()->getFullscreenWindow(pWorkspace, true) : nullptr;
-
-            auto        pWindow = PLAST_FOCUSED_WINDOW ? (PLAST_FOCUSED_WINDOW->isFloating() ? PLAST_FOCUSED_WINDOW : PCOVERING_FS_WINDOW) : PCOVERING_FS_WINDOW;
+            auto        pWindow = pWorkspace->getLastFocusedWindow();
 
             if (!pWindow) {
                 if (*PFOLLOWMOUSE == 1)
@@ -1429,7 +1402,7 @@ void CMonitor::changeWorkspace(const PHLWORKSPACE& pWorkspace, bool internal, bo
         }
     }
 
-    // set all LSes as not above fullscreen on workspace changes
+    // Reset layer surfaces state on workspace change
     for (auto const& ls : Desktop::layerState()->layers()) {
         if (ls->m_monitor == m_self)
             ls->m_flags &= ~LAYER_FLAG_ABOVE_FULLSCREEN;
@@ -1546,7 +1519,7 @@ void CMonitor::setSpecialWorkspace(const PHLWORKSPACE& pWorkspace, bool noFocus)
         IPC::Socket2::sock()->postEvent({"activespecial", std::format(",{}", PMONITOR->m_name)});
         IPC::Socket2::sock()->postEvent({"activespecialv2", std::format(",,{}", PMONITOR->m_name)});
 
-        // Reset layer surfaces on the old monitor when special workspace is stolen
+        // Reset layer surfaces state on the old monitor when special workspace is stolen
         for (auto const& ls : Desktop::layerState()->layers()) {
             if (ls->m_monitor == PMONITOR)
                 ls->m_flags &= ~LAYER_FLAG_ABOVE_FULLSCREEN;
@@ -1796,14 +1769,8 @@ uint32_t CMonitor::isSolitaryBlocked(bool full) {
             return reasons;
     }
 
-    if (!m_layerSurfaceLayers[ZWLR_LAYER_SHELL_V1_LAYER_OVERLAY].empty()) {
-        reasons |= SC_OVERLAYS;
-        if (!full)
-            return reasons;
-    }
-
-    for (auto const& topls : m_layerSurfaceLayers[ZWLR_LAYER_SHELL_V1_LAYER_TOP]) {
-        if (topls->alpha()[LS_ALPHA_FADE]->value() != 0.F) {
+    for (auto const& overlayls : m_layerSurfaceLayers[ZWLR_LAYER_SHELL_V1_LAYER_OVERLAY]) {
+        if (overlayls->alpha()[LS_ALPHA_FADE]->goal() != 0.F) {
             reasons |= SC_OVERLAYS;
             if (!full)
                 return reasons;
@@ -1811,7 +1778,7 @@ uint32_t CMonitor::isSolitaryBlocked(bool full) {
     }
 
     for (auto const& fadeout : Desktop::fadingOutState()->fadeouts()) {
-        if (!fadeout || fadeout->monitor() != m_self)
+        if (!fadeout || fadeout->monitor() != m_self || fadeout->plane() < Desktop::eFadeoutPlane::FADEOUT_PLANE_WINDOW_OVER_FULLSCREEN)
             continue;
 
         reasons |= SC_FADEOUT;
@@ -2402,6 +2369,20 @@ std::optional<NColorManagement::PImageDescription> CMonitor::getFSImageDescripti
     return SURF ? NColorManagement::CImageDescription::from(SURF->m_colorManagement->imageDescription()) : getDefaultImageDescription();
 }
 
+// the HDR description auto HDR would switch to, offered to the fullscreen surface so it can trigger the switch
+std::optional<NColorManagement::PImageDescription> CMonitor::getAutoHDRImageDescription(const SP<CWLSurfaceResource>& surface) {
+    static const auto PAUTOHDR = CConfigValue<Config::INTEGER>("render:cm_auto_hdr");
+
+    if (!*PAUTOHDR || !supportsHDR() || !m_activeMonitorRule.m_iccFile.empty() || m_cmType == NCMType::CM_HDR || m_cmType == NCMType::CM_HDR_EDID)
+        return {};
+
+    const auto FS_WINDOW = Fullscreen::controller()->getFullscreenWindow(m_self.lock());
+    if (!FS_WINDOW || FS_WINDOW->wlSurface()->resource() != surface || FS_WINDOW->m_ruleApplicator->noAutoHDR().valueOrDefault())
+        return {};
+
+    return getHDRImageDescription(*PAUTOHDR == 2 ? NCMType::CM_HDR_EDID : NCMType::CM_HDR);
+}
+
 NColorManagement::SPCPRimaries CMonitor::getMasteringPrimaries() {
     return m_output->parsedEDID.chromaticityCoords.has_value() ?
         NColorManagement::SPCPRimaries{
@@ -2418,6 +2399,28 @@ NColorManagement::SImageDescription::SPCMasteringLuminances CMonitor::getMasteri
         .min = m_minLuminance >= 0 ? m_minLuminance : (m_output->parsedEDID.hdrMetadata.has_value() ? m_output->parsedEDID.hdrMetadata->desiredContentMinLuminance : 0),
         .max = m_maxLuminance >= 0 ? m_maxLuminance : (m_output->parsedEDID.hdrMetadata.has_value() ? m_output->parsedEDID.hdrMetadata->desiredContentMaxLuminance : 0),
     };
+}
+
+NColorManagement::PImageDescription CMonitor::getHDRImageDescription(NCMType::eCMType cmType) {
+    const auto  masteringPrimaries = getMasteringPrimaries();
+    const auto& defaultHDR         = DEFAULT_HDR_IMAGE_DESCRIPTION->value();
+    const bool  edidPrimaries      = cmType == NCMType::CM_HDR_EDID;
+    const auto  primaries =
+        edidPrimaries && m_output->parsedEDID.chromaticityCoords.has_value() ? masteringPrimaries : NColorManagement::getPrimaries(NColorManagement::CM_PRIMARIES_BT2020);
+
+    return CImageDescription::from({
+        .transferFunction    = NColorManagement::CM_TRANSFER_FUNCTION_ST2084_PQ,
+        .primariesNameSet    = !edidPrimaries,
+        .primariesNamed      = NColorManagement::CM_PRIMARIES_BT2020,
+        .primaries           = primaries,
+        .masteringPrimaries  = masteringPrimaries,
+        .luminances          = {.min       = minLuminance() >= 0 ? minLuminance() : defaultHDR.getTFMinLuminance(),
+                                .max       = maxLuminance() > 0 ? sc<uint32_t>(maxLuminance()) : sc<uint32_t>(defaultHDR.getTFMaxLuminance()),
+                                .reference = sc<uint32_t>(defaultHDR.getTFRefLuminance())},
+        .masteringLuminances = getMasteringLuminances(),
+        .maxCLL              = maxCLL(),
+        .maxFALL             = maxFALL(),
+    });
 }
 
 uint32_t CMonitor::getPreferredReadFormat() {
@@ -2475,6 +2478,8 @@ bool CMonitor::canNoShaderCM(bool forDSmode) {
     return (
         isCompatibleTF(SRC_DESC_VALUE.transferFunction, DST_DESC->value().transferFunction) //
         && SRC_DESC_VALUE.transferFunctionPower == DST_DESC->value().transferFunctionPower  //
+        && SRC_DESC_VALUE.getTFMinLuminance() == DST_DESC->value().getTFMinLuminance()      //
+        && SRC_DESC_VALUE.getTFMaxLuminance() == DST_DESC->value().getTFMaxLuminance()      //
         && (!inHDR() || SRC_DESC_VALUE.luminances == DST_DESC->value().luminances)
         // not used by shaders atm
         // && SRC_DESC_VALUE.masteringLuminances == m_imageDescription->value().masteringLuminances && SRC_DESC_VALUE.maxCLL == m_imageDescription->value().maxCLL && SRC_DESC_VALUE.maxFALL == m_imageDescription->value().maxFALL

@@ -1,4 +1,5 @@
 #include <config/lua/LuaEventHandler.hpp>
+#include <config/lua/LuaCaller.hpp>
 
 #include <config/lua/objects/LuaEventSubscription.hpp>
 #include <config/lua/objects/LuaKeybind.hpp>
@@ -286,7 +287,8 @@ TEST(ConfigLuaObjects, eventSubscriptionRemoveAndIsActive) {
     const auto L = S.get();
 
     Objects::CLuaEventSubscription{}.setup(L);
-    CLuaEventHandler handler(L);
+    CLuaCaller       caller(L, [](std::string&&) {});
+    CLuaEventHandler handler(caller);
 
     ASSERT_EQ(luaL_dostring(L, R"(
         count = 0
@@ -298,9 +300,10 @@ TEST(ConfigLuaObjects, eventSubscriptionRemoveAndIsActive) {
 
     lua_getglobal(L, "onReload");
     ASSERT_TRUE(lua_isfunction(L, -1));
-    const int  ref = luaL_ref(L, LUA_REGISTRYINDEX);
+    CLuaRef ref{makeShared<SLuaStateLifetime>(L), L, -1};
+    lua_pop(L, 1);
 
-    const auto handle = handler.registerEvent("config.reloaded", ref);
+    const auto handle = handler.registerEvent("config.reloaded", std::move(ref));
     ASSERT_TRUE(handle.has_value());
 
     Objects::CLuaEventSubscription::push(L, &handler, *handle);
@@ -326,7 +329,8 @@ TEST(ConfigLuaObjects, eventSubscriptionSupportsEqAndToString) {
     const auto L = S.get();
 
     Objects::CLuaEventSubscription{}.setup(L);
-    CLuaEventHandler handler(L);
+    CLuaCaller       caller(L, [](std::string&&) {});
+    CLuaEventHandler handler(caller);
 
     ASSERT_EQ(luaL_dostring(L, R"(
         function cbA() end
@@ -336,14 +340,16 @@ TEST(ConfigLuaObjects, eventSubscriptionSupportsEqAndToString) {
 
     lua_getglobal(L, "cbA");
     ASSERT_TRUE(lua_isfunction(L, -1));
-    const int refA = luaL_ref(L, LUA_REGISTRYINDEX);
+    CLuaRef refA{makeShared<SLuaStateLifetime>(L), L, -1};
+    lua_pop(L, 1);
 
     lua_getglobal(L, "cbB");
     ASSERT_TRUE(lua_isfunction(L, -1));
-    const int  refB = luaL_ref(L, LUA_REGISTRYINDEX);
+    CLuaRef refB{makeShared<SLuaStateLifetime>(L), L, -1};
+    lua_pop(L, 1);
 
-    const auto handleA = handler.registerEvent("config.reloaded", refA);
-    const auto handleB = handler.registerEvent("config.reloaded", refB);
+    const auto handleA = handler.registerEvent("config.reloaded", std::move(refA));
+    const auto handleB = handler.registerEvent("config.reloaded", std::move(refB));
     ASSERT_TRUE(handleA.has_value());
     ASSERT_TRUE(handleB.has_value());
 

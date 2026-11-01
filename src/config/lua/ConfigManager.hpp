@@ -5,9 +5,6 @@
 #include <vector>
 #include <string>
 #include <optional>
-#include <chrono>
-#include <functional>
-#include <string_view>
 #include <unordered_map>
 #include <expected>
 
@@ -17,6 +14,7 @@
 
 #include "./types/LuaConfigValue.hpp"
 #include "./LuaEventHandler.hpp"
+#include "./LuaRef.hpp"
 
 #include "../../desktop/rule/windowRule/WindowRule.hpp"
 #include "../../desktop/rule/layerRule/LayerRule.hpp"
@@ -38,6 +36,7 @@ namespace Config::Supplementary {
 namespace Config::Lua {
     class CConfigManager;
     class CConfigManagerPluginLuaTestAccessor;
+    class CLuaCaller;
 }
 
 namespace Config::Lua::Layouts {
@@ -49,10 +48,6 @@ namespace Config::Lua::Bindings {
 }
 
 namespace Config::Lua {
-
-    struct SLuaStateLifetime {
-        lua_State* state = nullptr;
-    };
 
     class CConfigManager : public Config::IConfigManager {
       public:
@@ -89,6 +84,8 @@ namespace Config::Lua {
         virtual std::expected<void, std::string> registerPluginValue(void* handle, SP<Config::Values::IValue> value) override;
         virtual void                             onPluginUnload(void* handle) override;
 
+        virtual void                             warnDeprecated(std::string what, std::string why) override;
+        virtual void                             clearDeprecations() override;
         virtual std::vector<std::string>         deprecationNotices() const override;
 
         int                                      invokePluginLuaFunctionByID(uint64_t id, lua_State* L);
@@ -99,43 +96,25 @@ namespace Config::Lua {
         void                                     addError(std::string&& str);
         void                                     addEvalIssue(const Config::SConfigError& err);
 
-        void                                     registerLuaRef(int ref);
-        void                                     callLuaFn(int ref);
-        void                                     callLuaFn(int ref, const std::function<int(lua_State*)>& pushArgs, int timeoutMs, std::string_view context);
         std::expected<void, std::string>         registerLuaLayoutProvider(std::string name, lua_State* L, int providerTableIdx);
-        SDispatchResult                          callLuaFnBind(int ref);
         SP<SLuaStateLifetime>                    luaStateLifetime() const;
+        CLuaCaller&                              caller();
 
         // execute an arbitrary lua string on the current state.
-        std::optional<std::string> eval(const std::string& code, bool repl = false);
+        std::optional<std::string>                           eval(const std::string& code, bool repl = false);
 
-        int                        guardedPCall(int nargs, int nresults, int errfunc, int timeoutMs, std::string_view context);
+        static CConfigManager*                               fromLuaState(lua_State* L);
 
-        static CConfigManager*     fromLuaState(lua_State* L);
+        bool                                                 isFirstLaunch() const;
+        bool                                                 isDynamicParse() const;
+        bool                                                 isREPL() const;
 
-        static constexpr int       LUA_WATCHDOG_INSTRUCTION_INTERVAL = 10000;
-        static constexpr int       LUA_TIMEOUT_CONFIG_RELOAD_MS      = 1500;
-        static constexpr int       LUA_TIMEOUT_EVENT_CALLBACK_MS     = 50;
-        static constexpr int       LUA_TIMEOUT_KEYBIND_CALLBACK_MS   = 100;
-        static constexpr int       LUA_TIMEOUT_TIMER_CALLBACK_MS     = 50;
-        static constexpr int       LUA_TIMEOUT_LAYOUT_CALLBACK_MS    = 50;
-        static constexpr int       LUA_TIMEOUT_EVAL_MS               = 250;
-        static constexpr int       LUA_TIMEOUT_DISPATCH_MS           = 100;
+        std::string                                          m_currentSubmap;
+        std::string                                          m_currentSubmapReset;
 
-        bool                       isFirstLaunch() const;
-        bool                       isDynamicParse() const;
-        bool                       isREPL() const;
+        UP<CLuaEventHandler>                                 m_eventHandler;
 
-        std::string                m_currentSubmap;
-        std::string                m_currentSubmapReset;
-
-        UP<CLuaEventHandler>       m_eventHandler;
-
-        struct SLuaTimer {
-            SP<CEventLoopTimer> timer;
-            int                 luaRef = LUA_NOREF; // registry ref to the lua callback
-        };
-        std::vector<SLuaTimer>                               m_luaTimers;
+        std::vector<SP<CEventLoopTimer>>                     m_luaTimers;
 
         std::vector<std::string>                             m_registeredPlugins;
 
@@ -161,34 +140,30 @@ namespace Config::Lua {
         void                                         registerValue(const char* name, UP<ILuaConfigValue>&& val);
         void                                         cleanTimers();
         void                                         clearLuaLayoutProviders();
-        void                                         clearHeldLuaRefs();
         std::string                                  luaConfigValueName(const std::string& s);
         std::expected<void, std::string>             registerPluginLuaFunctionInState(uint64_t id, const std::string& namespace_, const std::string& name);
         std::expected<void, std::string>             unregisterPluginLuaFunctionInState(const std::string& namespace_, const std::string& name);
         void                                         erasePluginLuaFunction(uint64_t id);
         void                                         reregisterLuaPluginFns();
 
-        static void                                  watchdogHook(lua_State* L, lua_Debug* ar);
-
         lua_State*                                   m_lua          = nullptr;
         bool                                         m_ownsLuaState = false;
         SP<SLuaStateLifetime>                        m_luaStateLifetime;
+        UP<CLuaCaller>                               m_caller;
 
         bool                                         m_lastConfigVerificationWasSuccessful = true;
         bool                                         m_isFirstLaunch                       = true;
         bool                                         m_manualCrashInitiated                = false;
-        bool                                         m_watchdogActive                      = false;
         bool                                         m_isParsingConfig                     = false;
         bool                                         m_isEvaluating                        = false;
         bool                                         m_isREPL                              = false;
 
-        std::chrono::steady_clock::time_point        m_watchdogDeadline;
-        std::string                                  m_watchdogContext;
-
         std::string                                  m_mainConfigPath;
 
-        std::vector<int>                             m_heldLuaRefs;
         std::vector<SP<Layouts::SLuaLayoutProvider>> m_luaLayoutProviders;
+
+        // additional deprecation notices, added at runtime
+        std::vector<std::pair<std::string, std::string>> m_extraDeprecations;
 
         // this is here for legacy reasons.
         std::unordered_map<std::string, const void*> m_configPtrMap;

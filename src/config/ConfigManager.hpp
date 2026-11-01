@@ -21,7 +21,7 @@ namespace Config {
         // <type>* const*
         void* const*          dataptr   = nullptr;
         const std::type_info* type      = nullptr;
-        bool                  setByUser = false;
+        const bool*           setByUser = nullptr;
     };
 
     enum eConfigManagerType : uint8_t {
@@ -69,7 +69,9 @@ namespace Config {
         virtual std::expected<void, std::string> registerPluginValue(void* handle, SP<Config::Values::IValue> value) = 0;
         virtual void                             onPluginUnload(void* handle)                                        = 0;
 
-        virtual std::vector<std::string>         deprecationNotices() const = 0;
+        virtual void                             warnDeprecated(std::string what, std::string why) = 0;
+        virtual void                             clearDeprecations()                               = 0;
+        virtual std::vector<std::string>         deprecationNotices() const                        = 0;
     };
 
     bool                initConfigManager();

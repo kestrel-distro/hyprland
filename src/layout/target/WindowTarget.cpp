@@ -1,6 +1,7 @@
 #include "WindowTarget.hpp"
 #include "../../desktop/view/window/Window.hpp"
 #include "../../desktop/view/window/WindowPresentation.hpp"
+#include "../../desktop/view/window/WindowStateTracker.hpp"
 
 #include "../space/Space.hpp"
 #include "../algorithm/Algorithm.hpp"
@@ -290,6 +291,7 @@ void CWindowTarget::setFloating(bool x) {
 
     m_floating = x;
     m_window->m_state &= ~Desktop::View::WINDOW_STATE_PINNED;
+    m_window->stateTracker().scheduleUpdate();
 
     m_window->m_ruleApplicator->propertiesChanged(Desktop::Rule::RULE_PROP_FLOATING);
 }
@@ -325,7 +327,8 @@ std::expected<SGeometryRequested, eGeometryFailure> CWindowTarget::desiredGeomet
 
     requested.size = clampSizeForDesired(DESIRED_GEOM.size());
 
-    if (m_window->backend().isX11())
+    // Leave optional 'pos' unset for X11 windows that open at 0, 0 (treat that as a request to be opened wherever compositor prefers, unless positionAuthoritative is true)
+    if (m_window->backend().isX11() && (CLIENT_GEOMETRY.positionAuthoritative || DESIRED_GEOM.pos() != Vector2D(0, 0)))
         requested.pos = DESIRED_GEOM.pos() + (DESIRED_GEOM.size() - requested.size) / 2.F;
 
     const auto STOREDSIZE = m_window->m_ruleApplicator->persistentSize().valueOrDefault() ? Desktop::floatState()->get(m_window.lock()) : std::nullopt;

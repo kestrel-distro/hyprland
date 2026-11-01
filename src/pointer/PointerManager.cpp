@@ -277,6 +277,8 @@ void CPointerManager::setCursorSurface(SP<Desktop::View::CWLSurface> surf, const
         m_currentCursorImage.surface = surf;
         m_currentCursorImage.scale   = surf->resource()->m_current.scale;
 
+        surf->resource()->m_pending.updated.bits.cursor = true;
+
         surf->resource()->map();
 
         m_currentCursorImage.destroySurface = surf->m_events.destroy.listen([this] { resetCursorImage(); });
@@ -739,7 +741,7 @@ void CPointerManager::renderSoftwareCursorsFor(Render::CRenderContext& ctx, PHLM
     auto state = stateFor(pMonitor);
 
     if (!state->hardwareFailed && state->softwareLocks == 0 && !screencopy) {
-        if (m_currentCursorImage.surface)
+        if (m_currentCursorImage.surface && !ctx.m_blockSurfaceFeedback)
             m_currentCursorImage.surface->resource()->frame(now);
         return;
     }
@@ -778,7 +780,7 @@ void CPointerManager::renderSoftwareCursorsFor(Render::CRenderContext& ctx, PHLM
         state->swRenderedBox = logicalBox;
     }
 
-    if (m_currentCursorImage.surface)
+    if (m_currentCursorImage.surface && !ctx.m_blockSurfaceFeedback)
         m_currentCursorImage.surface->resource()->frame(now);
 }
 

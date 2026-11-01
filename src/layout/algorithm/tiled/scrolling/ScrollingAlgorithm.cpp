@@ -472,15 +472,13 @@ void SScrollingData::recalculate(bool forceInstant) {
         CBox       visual        = logical;
         const bool PRIMARY_HORIZ = controller->isPrimaryHorizontal();
 
-        const bool COL_NOT_LEFT      = controller->isReversed() ? colIdx + 1 < columns.size() : colIdx > 0;
-        const bool COL_NOT_RIGHT     = controller->isReversed() ? colIdx > 0 : colIdx + 1 < columns.size();
         const bool TARGET_NOT_TOP    = controller->isReversed() ? targetIdx + 1 < columns[colIdx]->targetDatas.size() : targetIdx > 0;
         const bool TARGET_NOT_BOTTOM = controller->isReversed() ? targetIdx > 0 : targetIdx + 1 < columns[colIdx]->targetDatas.size();
 
-        const bool GAP_LEFT   = PRIMARY_HORIZ ? COL_NOT_LEFT : TARGET_NOT_TOP;
-        const bool GAP_RIGHT  = PRIMARY_HORIZ ? COL_NOT_RIGHT : TARGET_NOT_BOTTOM;
-        const bool GAP_TOP    = PRIMARY_HORIZ ? TARGET_NOT_TOP : COL_NOT_LEFT;
-        const bool GAP_BOTTOM = PRIMARY_HORIZ ? TARGET_NOT_BOTTOM : COL_NOT_RIGHT;
+        const bool GAP_LEFT   = PRIMARY_HORIZ || TARGET_NOT_TOP;
+        const bool GAP_RIGHT  = PRIMARY_HORIZ || TARGET_NOT_BOTTOM;
+        const bool GAP_TOP    = !PRIMARY_HORIZ || TARGET_NOT_TOP;
+        const bool GAP_BOTTOM = !PRIMARY_HORIZ || TARGET_NOT_BOTTOM;
 
         const auto GAPOFFSETTOPLEFT     = Vector2D(sc<double>(GAP_LEFT ? GAPSIN.m_left : 0), sc<double>(GAP_TOP ? GAPSIN.m_top : 0));
         const auto GAPOFFSETBOTTOMRIGHT = Vector2D(sc<double>(GAP_RIGHT ? GAPSIN.m_right : 0), sc<double>(GAP_BOTTOM ? GAPSIN.m_bottom : 0));
@@ -634,8 +632,9 @@ CScrollingAlgorithm::CScrollingAlgorithm() : m_scrollingFullscreenHandler(makeUn
     m_mouseButtonCallback = Event::bus()->m_events.input.mouse.button.listen([this](IPointer::SButtonEvent e, Event::SCallbackInfo&) {
         static const auto PFOLLOW_FOCUS = CConfigValue<Config::INTEGER>("scrolling:follow_focus");
 
+        // click-down shouldn't cause viewport moves
         if (*PFOLLOW_FOCUS && e.state == WL_POINTER_BUTTON_STATE_RELEASED && Desktop::focusState()->window())
-            focusOnInput(Desktop::focusState()->window()->layoutTarget(), INPUT_MODE_CLICK);
+            focusOnInput(Desktop::focusState()->window()->layoutTarget(), (*PFOLLOW_FOCUS == 1) ? INPUT_MODE_CLICK : INPUT_MODE_SOFT);
     });
 
     m_focusCallback = Event::bus()->m_events.window.active.listen([this](PHLWINDOW pWindow, Desktop::eFocusReason reason) {
@@ -1863,6 +1862,10 @@ double CScrollingAlgorithm::normalizedTapeOffset() {
         return 0.0;
 
     return m_scrollingData->controller->getOffset() / primary;
+}
+
+double CScrollingAlgorithm::getScrollingTapeOffset() {
+    return m_scrollingData->controller->getOffset();
 }
 
 std::optional<Vector2D> CScrollingAlgorithm::predictSizeForNewTarget() {

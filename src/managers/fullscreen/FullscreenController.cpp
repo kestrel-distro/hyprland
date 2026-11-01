@@ -14,6 +14,7 @@
 #include "../../desktop/view/window/Window.hpp"
 #include "../../desktop/view/window/WindowFullscreenPolicy.hpp"
 #include "../../desktop/view/window/WindowPresentation.hpp"
+#include "../../desktop/view/window/WindowStateTracker.hpp"
 
 #include "../../event/EventBus.hpp"
 #include "../../output/Monitor.hpp"
@@ -388,7 +389,7 @@ void CFullscreenController::setFullscreenMode(const PHLWINDOW window, std::optio
     const bool          HANDLE_PINNED_WINDOW                           = (window->m_state & Desktop::View::WINDOW_STATE_PINNED) || window->fullscreenPolicy().pinFullscreened();
     std::optional<bool> pinnedWindowRequetsInternalFS                  = std::nullopt;
 
-    static auto         PALLOWPINFULLSCREEN = CConfigValue<Config::INTEGER>("binds:allow_pin_fullscreen");
+    static auto         PALLOWPINFULLSCREEN = CConfigValue<Config::BOOL>("binds:allow_pin_fullscreen");
     if (*PALLOWPINFULLSCREEN && !window->fullscreenPolicy().pinFullscreened() && (window->m_state & Desktop::View::WINDOW_STATE_PINNED) &&
         !WINDOW_IS_ALREADY_INTERNAL_FS_HANDLER_AGNOSTIC)
         pinnedWindowRequetsInternalFS = true;
@@ -401,9 +402,11 @@ void CFullscreenController::setFullscreenMode(const PHLWINDOW window, std::optio
         if (pinnedWindowRequetsInternalFS.value_or(false)) {
             window->m_state &= ~Desktop::View::WINDOW_STATE_PINNED;
             window->fullscreenPolicy().setPinFullscreened(true);
+            window->stateTracker().scheduleUpdate();
         } else if (!pinnedWindowRequetsInternalFS.value_or(true)) {
             window->m_state |= Desktop::View::WINDOW_STATE_PINNED;
             window->fullscreenPolicy().setPinFullscreened(false);
+            window->stateTracker().scheduleUpdate();
         } else if (!(*PALLOWPINFULLSCREEN)) {
             if (WANT_SYNC)
                 stateChanged = false;

@@ -146,7 +146,7 @@ endif()
 set(AQUAMARINE_MINIMUM_VERSION 0.15.0)
 set(HYPRLANG_MINIMUM_VERSION 0.6.7)
 set(HYPRCURSOR_MINIMUM_VERSION 0.1.7)
-set(HYPRUTILS_MINIMUM_VERSION 0.14.0)
+set(HYPRUTILS_MINIMUM_VERSION 0.14.3)
 set(HYPRGRAPHICS_MINIMUM_VERSION 0.5.1)
 
 pkg_check_modules(aquamarine_dep REQUIRED IMPORTED_TARGET aquamarine>=${AQUAMARINE_MINIMUM_VERSION})
@@ -541,14 +541,9 @@ else()
   target_link_libraries(hyprland_lib PUBLIC OpenGL::EGL OpenGL::GLES3 glslang::glslang glslang::glslang-default-resource-limits glslang::SPIRV Threads::Threads)
 endif()
 
-pkg_check_modules(hyprland_protocols_dep hyprland-protocols>=0.7.1)
-if(hyprland_protocols_dep_FOUND)
-  pkg_get_variable(HYPRLAND_PROTOCOLS hyprland-protocols pkgdatadir)
-  message(STATUS "hyprland-protocols dependency set to ${HYPRLAND_PROTOCOLS}")
-else()
-  set(HYPRLAND_PROTOCOLS "${CMAKE_SOURCE_DIR}/subprojects/hyprland-protocols")
-  message(STATUS "hyprland-protocols subproject set to ${HYPRLAND_PROTOCOLS}")
-endif()
+pkg_check_modules(hyprland_protocols_dep REQUIRED hyprland-protocols>=0.8.0)
+pkg_get_variable(HYPRLAND_PROTOCOLS hyprland-protocols pkgdatadir)
+message(STATUS "hyprland-protocols dependency set to ${HYPRLAND_PROTOCOLS}")
 
 protocolnew("${HYPRLAND_PROTOCOLS}/protocols" "hyprland-global-shortcuts-v1"
             true)
@@ -565,6 +560,7 @@ protocolnew("protocols" "input-method-unstable-v2" true)
 protocolnew("protocols" "wlr-output-management-unstable-v1" true)
 protocolnew("protocols" "kde-server-decoration" true)
 protocolnew("protocols" "vicinae-hotkey-v1" true)
+protocolnew("protocols" "xx-hotkey-v1" true)
 protocolnew("protocols" "wlr-data-control-unstable-v1" true)
 protocolnew("${HYPRLAND_PROTOCOLS}/protocols" "hyprland-focus-grab-v1" true)
 protocolnew("protocols" "wlr-layer-shell-unstable-v1" true)
@@ -572,8 +568,8 @@ protocolnew("protocols" "wayland-drm" true)
 protocolnew("${HYPRLAND_PROTOCOLS}/protocols" "hyprland-ctm-control-v1" true)
 protocolnew("${HYPRLAND_PROTOCOLS}/protocols" "hyprland-surface-v1" true)
 protocolnew("${HYPRLAND_PROTOCOLS}/protocols" "hyprland-lock-notify-v1" true)
-protocolnew("${HYPRLAND_PROTOCOLS}/protocols" "hyprland-toplevel-mapping-v1"
-            true)
+protocolnew("${HYPRLAND_PROTOCOLS}/protocols" "hyprland-toplevel-mapping-v1" true)
+protocolnew("${HYPRLAND_PROTOCOLS}/protocols" "hyprland-workspace-image-capture-source-v1" true)
 
 protocolnew("staging/tearing-control" "tearing-control-v1" false)
 protocolnew("staging/fractional-scale" "fractional-scale-v1" false)
@@ -641,15 +637,21 @@ set(CMAKE_INSTALL_DEFAULT_DIRECTORY_PERMISSIONS
     GROUP_READ GROUP_EXECUTE
     WORLD_READ WORLD_EXECUTE)
 
-# binary and symlink
+# binary
 install(TARGETS Hyprland)
-
+# symlink: create link at install time, install it, and clean it up
 install(
   CODE "execute_process( \
         COMMAND ${CMAKE_COMMAND} -E create_symlink \
         ${CMAKE_INSTALL_FULL_BINDIR}/Hyprland \
-        \"\$ENV{DESTDIR}${CMAKE_INSTALL_FULL_BINDIR}/hyprland\" \
+        ${CMAKE_CURRENT_BINARY_DIR}/hyprland.link \
         )")
+install(
+  FILES ${CMAKE_CURRENT_BINARY_DIR}/hyprland.link
+  DESTINATION ${CMAKE_INSTALL_FULL_BINDIR}
+  RENAME hyprland)
+install(CODE "file(REMOVE ${CMAKE_CURRENT_BINARY_DIR}/hyprland.link)")
+
 # session file
 configure_file(
     ${CMAKE_SOURCE_DIR}/example/hyprland.desktop.in

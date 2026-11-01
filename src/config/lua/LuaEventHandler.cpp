@@ -1,5 +1,5 @@
 #include "LuaEventHandler.hpp"
-#include "ConfigManager.hpp"
+#include "LuaCaller.hpp"
 #include "objects/LuaWindow.hpp"
 #include "objects/LuaWorkspace.hpp"
 #include "objects/LuaGroup.hpp"
@@ -8,6 +8,7 @@
 
 #include "../../event/EventBus.hpp"
 #include "../../desktop/state/FocusState.hpp"
+#include "../../desktop/view/window/WindowStateTracker.hpp"
 #include <expected>
 #include <vector>
 
@@ -22,66 +23,28 @@ using namespace Config::Lua;
 using namespace Config::Lua::Objects;
 
 void CLuaEventHandler::dispatch(const std::string& name, int nargs, const std::function<void(lua_State*)>& pushArgs) {
-    auto it = m_callbacks.find(name);
+    const auto it = m_callbacks.find(name);
     if (it == m_callbacks.end() || it->second.empty())
         return;
 
-    if (m_dispatchDepth >= MAX_DISPATCH_DEPTH) {
-        LOG(Log::WARN, "[LuaEvents] max dispatch depth ({}) reached while handling '{}'", MAX_DISPATCH_DEPTH, name);
-        return;
-    }
+    const auto CONTEXT = std::format("hl.on(\"{}\") callback", name);
+    const auto HANDLES = it->second;
 
-    const auto handles = it->second;
-
-    for (const auto handle : handles) {
+    for (const auto handle : HANDLES) {
         const auto sub = m_subscriptions.find(handle);
         if (sub == m_subscriptions.end())
             continue;
 
-        if (m_activeHandles.contains(handle)) {
-            if (m_reentrancyWarnedHandles.emplace(handle).second)
-                LOG(Log::WARN, "[LuaEvents] suppressed recursive hl.on(\"{}\") callback invocation", name);
-            continue;
-        }
-
-        struct SDispatchScope {
-            CLuaEventHandler* self   = nullptr;
-            uint64_t          handle = 0;
-
-            ~SDispatchScope() {
-                if (!self)
-                    return;
-
-                self->m_activeHandles.erase(handle);
-                if (self->m_dispatchDepth > 0)
-                    --self->m_dispatchDepth;
-            }
-        } dispatchScope{.self = this, .handle = handle};
-
-        m_activeHandles.emplace(handle);
-        ++m_dispatchDepth;
-
-        lua_rawgeti(m_lua, LUA_REGISTRYINDEX, sub->second.luaRef);
-        pushArgs(m_lua);
-
-        auto* mgr = CConfigManager::fromLuaState(m_lua);
-
-        int   status = LUA_OK;
-        if (mgr)
-            status = mgr->guardedPCall(nargs, 0, 0, CConfigManager::LUA_TIMEOUT_EVENT_CALLBACK_MS, std::format("hl.on(\"{}\") callback", name));
-        else
-            status = lua_pcall(m_lua, nargs, 0, 0);
-
-        if (status != LUA_OK) {
-            const char* err = lua_tostring(m_lua, -1);
-            if (mgr)
-                mgr->addError(std::format("hl.on(\"{}\") callback: {}", name, err ? err : "(unknown)"));
-            lua_pop(m_lua, 1);
-        }
+        m_caller.call(sub->second.fn, CLuaCaller::LUA_TIMEOUT_EVENT_CALLBACK_MS, CONTEXT, [&](lua_State* L) {
+            pushArgs(L);
+            return nargs;
+        });
     }
 }
 
-CLuaEventHandler::CLuaEventHandler(lua_State* L) : m_lua(L) {
+CLuaEventHandler::CLuaEventHandler(CLuaCaller& caller) : m_caller(caller) {
+    const auto L = m_caller.state();
+
     CLuaWindow{}.setup(L);
     Objects::CLuaGroup{}.setup(L);
     CLuaWorkspace{}.setup(L);
@@ -107,6 +70,20 @@ CLuaEventHandler::CLuaEventHandler(lua_State* L) : m_lua(L) {
     m_listeners.push_back(bus()->m_events.window.class_.listen([this](PHLWINDOW w) { dispatch("window.class", 1, [&](lua_State* L) { CLuaWindow::push(L, w); }); }));
     m_listeners.push_back(bus()->m_events.window.pin.listen([this](PHLWINDOW w) { dispatch("window.pin", 1, [&](lua_State* L) { CLuaWindow::push(L, w); }); }));
     m_listeners.push_back(bus()->m_events.window.fullscreen.listen([this](PHLWINDOW w) { dispatch("window.fullscreen", 1, [&](lua_State* L) { CLuaWindow::push(L, w); }); }));
+    m_listeners.push_back(bus()->m_events.window.updateState.listen([this](PHLWINDOW w, const Desktop::View::SWindowStateUpdate& changes) {
+        dispatch("window.update_state", 2, [&](lua_State* L) {
+            CLuaWindow::push(L, w);
+            lua_createtable(L, 0, 2);
+            if (changes.floating.has_value()) {
+                lua_pushboolean(L, *changes.floating);
+                lua_setfield(L, -2, "float");
+            }
+            if (changes.pinned.has_value()) {
+                lua_pushboolean(L, *changes.pinned);
+                lua_setfield(L, -2, "pin");
+            }
+        });
+    }));
     m_listeners.push_back(bus()->m_events.window.updateRules.listen([this](PHLWINDOW w) { dispatch("window.update_rules", 1, [&](lua_State* L) { CLuaWindow::push(L, w); }); }));
     m_listeners.push_back(bus()->m_events.window.moveToWorkspace.listen([this](PHLWINDOW w, PHLWORKSPACE ws) {
         dispatch("window.move_to_workspace", 2, [&](lua_State* L) {
@@ -138,11 +115,17 @@ CLuaEventHandler::CLuaEventHandler(lua_State* L) : m_lua(L) {
             CLuaMonitor::push(L, mon);
         });
     }));
-    m_listeners.push_back(bus()->m_events.workspace.created.listen([this](PHLWORKSPACEREF wsRef) {
+    m_listeners.push_back(bus()->m_events.workspace.createdLate.listen([this](PHLWORKSPACEREF wsRef) {
         const auto ws = wsRef.lock();
         if (!ws)
             return;
         dispatch("workspace.created", 1, [&](lua_State* L) { CLuaWorkspace::push(L, ws); });
+    }));
+    m_listeners.push_back(bus()->m_events.workspace.createdEarly.listen([this](PHLWORKSPACEREF wsRef) {
+        const auto ws = wsRef.lock();
+        if (!ws)
+            return;
+        dispatch("workspace.created_early", 1, [&](lua_State* L) { CLuaWorkspace::push(L, ws); });
     }));
     m_listeners.push_back(bus()->m_events.workspace.removed.listen([this](PHLWORKSPACEREF wsRef) {
         if (!wsRef)
@@ -201,13 +184,13 @@ CLuaEventHandler::~CLuaEventHandler() {
     clearEvents();
 }
 
-std::optional<uint64_t> CLuaEventHandler::registerEvent(const std::string& name, int luaRef) {
+std::optional<uint64_t> CLuaEventHandler::registerEvent(const std::string& name, CLuaRef&& fn) {
     if (!knownEvents().contains(name))
         return std::nullopt;
 
     const auto handle = m_nextHandle++;
     m_callbacks[name].push_back(handle);
-    m_subscriptions[handle] = {.eventName = name, .luaRef = luaRef};
+    m_subscriptions.emplace(handle, SSubscription{.eventName = name, .fn = std::move(fn)});
 
     return handle;
 }
@@ -217,8 +200,6 @@ bool CLuaEventHandler::unregisterEvent(uint64_t handle) {
     if (it == m_subscriptions.end())
         return false;
 
-    luaL_unref(m_lua, LUA_REGISTRYINDEX, it->second.luaRef);
-
     auto callbacksIt = m_callbacks.find(it->second.eventName);
     if (callbacksIt != m_callbacks.end()) {
         std::erase(callbacksIt->second, handle);
@@ -227,20 +208,12 @@ bool CLuaEventHandler::unregisterEvent(uint64_t handle) {
     }
 
     m_subscriptions.erase(it);
-    m_activeHandles.erase(handle);
-    m_reentrancyWarnedHandles.erase(handle);
 
     return true;
 }
 
 void CLuaEventHandler::clearEvents() {
-    for (const auto& s : m_subscriptions) {
-        luaL_unref(m_lua, LUA_REGISTRYINDEX, s.second.luaRef);
-    }
-
     m_subscriptions.clear();
-    m_activeHandles.clear();
-    m_reentrancyWarnedHandles.clear();
     m_callbacks.clear();
 }
 
@@ -288,6 +261,7 @@ std::unordered_set<std::string> CLuaEventHandler::knownEvents() {
         "window.class",
         "window.pin",
         "window.fullscreen",
+        "window.update_state",
         "window.update_rules",
         "window.move_to_workspace",
         "window.bell",
@@ -301,6 +275,7 @@ std::unordered_set<std::string> CLuaEventHandler::knownEvents() {
         "workspace.active",
         "workspace.special_active",
         "workspace.created",
+        "workspace.created_early",
         "workspace.removed",
         "workspace.move_to_monitor",
         "config.reloaded",

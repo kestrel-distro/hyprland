@@ -1,4 +1,5 @@
 #include "ConfigManager.hpp"
+#include "LuaCaller.hpp"
 #include "../../desktop/view/window/WindowPresentation.hpp"
 #include "LuaBindings.hpp"
 #include "DefaultConfig.hpp"
@@ -426,10 +427,11 @@ CConfigManager::~CConfigManager() {
 
     cleanTimers();
     clearLuaLayoutProviders();
-    clearHeldLuaRefs();
 
     if (m_luaStateLifetime)
         m_luaStateLifetime->state = nullptr;
+
+    m_caller.reset();
 
     if (m_lua && m_ownsLuaState)
         lua_close(m_lua);
@@ -437,6 +439,10 @@ CConfigManager::~CConfigManager() {
 
 SP<SLuaStateLifetime> CConfigManager::luaStateLifetime() const {
     return m_luaStateLifetime;
+}
+
+CLuaCaller& CConfigManager::caller() {
+    return *m_caller;
 }
 
 CConfigManager* CConfigManager::fromLuaState(lua_State* L) {
@@ -449,48 +455,6 @@ CConfigManager* CConfigManager::fromLuaState(lua_State* L) {
     return mgr;
 }
 
-void CConfigManager::watchdogHook(lua_State* L, lua_Debug* /*ar*/) {
-    auto* mgr = fromLuaState(L);
-    if (!mgr || !mgr->m_watchdogActive)
-        return;
-
-    if (std::chrono::steady_clock::now() <= mgr->m_watchdogDeadline)
-        return;
-
-    const auto& context = mgr->m_watchdogContext;
-    if (context.empty())
-        luaL_error(L, "[Lua] execution timed out");
-
-    luaL_error(L, "[Lua] execution timed out in %s", context.c_str());
-}
-
-int CConfigManager::guardedPCall(int nargs, int nresults, int errfunc, int timeoutMs, std::string_view context) {
-    if (!m_lua)
-        return LUA_ERRERR;
-
-    const auto                                  prevHook  = lua_gethook(m_lua);
-    const int                                   prevMask  = lua_gethookmask(m_lua);
-    const int                                   prevCount = lua_gethookcount(m_lua);
-
-    const bool                                  prevWatchdogActive   = m_watchdogActive;
-    const std::chrono::steady_clock::time_point prevWatchdogDeadline = m_watchdogDeadline;
-    const std::string                           prevWatchdogContext  = m_watchdogContext;
-
-    m_watchdogActive   = timeoutMs > 0;
-    m_watchdogDeadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(std::max(timeoutMs, 1));
-    m_watchdogContext  = context;
-
-    lua_sethook(m_lua, &CConfigManager::watchdogHook, LUA_MASKCOUNT, LUA_WATCHDOG_INSTRUCTION_INTERVAL);
-    const int result = lua_pcall(m_lua, nargs, nresults, errfunc);
-
-    lua_sethook(m_lua, prevHook, prevMask, prevCount);
-    m_watchdogActive   = prevWatchdogActive;
-    m_watchdogDeadline = prevWatchdogDeadline;
-    m_watchdogContext  = prevWatchdogContext;
-
-    return result;
-}
-
 eConfigManagerType CConfigManager::type() {
     return CONFIG_LUA;
 }
@@ -500,20 +464,14 @@ void CConfigManager::registerValue(const char* name, UP<ILuaConfigValue>&& val) 
 }
 
 void CConfigManager::cleanTimers() {
-    for (auto& t : m_luaTimers) {
-        t.timer->cancel();
-        g_pEventLoopManager->removeTimer(t.timer);
-
-        if (m_lua && t.luaRef != LUA_NOREF) {
-            luaL_unref(m_lua, LUA_REGISTRYINDEX, t.luaRef);
-            t.luaRef = LUA_NOREF;
-        }
+    for (const auto& t : m_luaTimers) {
+        t->cancel();
+        g_pEventLoopManager->removeTimer(t);
     }
     m_luaTimers.clear();
 }
 
 void CConfigManager::reinitLuaState() {
-    // Destroy the event handler first so its luaL_unref calls happen while m_lua is still valid.
     m_eventHandler.reset();
 
     cleanTimers();
@@ -521,6 +479,8 @@ void CConfigManager::reinitLuaState() {
 
     if (m_luaStateLifetime)
         m_luaStateLifetime->state = nullptr;
+
+    m_caller.reset();
 
     if (m_lua && m_ownsLuaState) {
         lua_close(m_lua);
@@ -530,6 +490,7 @@ void CConfigManager::reinitLuaState() {
     m_lua              = luaL_newstate();
     m_ownsLuaState     = true;
     m_luaStateLifetime = makeShared<SLuaStateLifetime>(m_lua);
+    m_caller           = makeUnique<CLuaCaller>(m_lua, [this](std::string&& e) { addError(std::move(e)); });
     luaL_openlibs(m_lua);
 
     lua_getglobal(m_lua, "debug");
@@ -569,7 +530,7 @@ void CConfigManager::reinitLuaState() {
 
     Bindings::registerBindings(m_lua, this);
 
-    m_eventHandler = makeUnique<CLuaEventHandler>(m_lua);
+    m_eventHandler = makeUnique<CLuaEventHandler>(*m_caller);
 
     // Hook package.searchers[2] (the Lua file searcher) to track require()'d paths.
     lua_getglobal(m_lua, "package");
@@ -694,6 +655,7 @@ void CConfigManager::reload() {
         lua_pop(m_lua, 2); // pop loaded, package
 
         if (luaL_loadfile(m_lua, m_mainConfigPath.c_str()) != LUA_OK) {
+            clearDeprecations();
             m_errors.clear();
             addError(lua_tostring(m_lua, -1));
             lua_pop(m_lua, 1);
@@ -717,13 +679,13 @@ void CConfigManager::reload() {
     g_pTrackpadGestures->clearGestures();
     cleanTimers();
     clearLuaLayoutProviders();
+    clearDeprecations();
     m_luaWindowRules.clear();
     m_luaLayerRules.clear();
     m_errors.clear();
     m_deviceConfigs.clear();
     m_registeredPlugins.clear();
     m_eventHandler->clearEvents();
-    clearHeldLuaRefs();
 
     if (Keybinds::mgr())
         Keybinds::mgr()->clearBinds();
@@ -752,7 +714,7 @@ void CConfigManager::reload() {
     });
     lua_insert(m_lua, 1);
 
-    if (guardedPCall(0, 0, 1, LUA_TIMEOUT_CONFIG_RELOAD_MS, "config reload") != LUA_OK) {
+    if (m_caller->guardedPCall(m_lua, 0, 0, 1, CLuaCaller::LUA_TIMEOUT_CONFIG_RELOAD_MS, "config reload") != LUA_OK) {
         addError(lua_tostring(m_lua, -1));
         lua_pop(m_lua, 1);
         m_lastConfigVerificationWasSuccessful = false;
@@ -912,7 +874,7 @@ std::optional<std::string> CConfigManager::eval(const std::string& code, bool re
         }
     }
 
-    if (guardedPCall(0, LUA_MULTRET, 0, LUA_TIMEOUT_EVAL_MS, "hyprctl eval") != LUA_OK) {
+    if (m_caller->guardedPCall(m_lua, 0, LUA_MULTRET, 0, CLuaCaller::LUA_TIMEOUT_EVAL_MS, "hyprctl eval") != LUA_OK) {
         std::string err = lua_tostring(m_lua, -1);
         lua_pop(m_lua, 1);
         return std::format("error: {}", err);
@@ -1047,7 +1009,7 @@ SConfigOptionReply CConfigManager::getConfigValue(const std::string& s) {
 
         m_configPtrMap[s] = cv->data();
 
-        return SConfigOptionReply{.dataptr = cc<void* const*>(&m_configPtrMap.at(s)), .type = cv->underlying(), .setByUser = cv->setByUser()};
+        return SConfigOptionReply{.dataptr = cc<void* const*>(&m_configPtrMap.at(s)), .type = cv->underlying(), .setByUser = cv->setByUserPtr()};
     }
 
     std::string s2 = luaConfigValueName(s);
@@ -1059,7 +1021,7 @@ SConfigOptionReply CConfigManager::getConfigValue(const std::string& s) {
 
     m_configPtrMap[s2] = cv->data();
 
-    return SConfigOptionReply{.dataptr = cc<void* const*>(&m_configPtrMap.at(s2)), .type = cv->underlying(), .setByUser = cv->setByUser()};
+    return SConfigOptionReply{.dataptr = cc<void* const*>(&m_configPtrMap.at(s2)), .type = cv->underlying(), .setByUser = cv->setByUserPtr()};
 }
 
 std::string CConfigManager::getMainConfigPath() {
@@ -1361,91 +1323,6 @@ void CConfigManager::onPluginUnload(void* handle) {
     });
 }
 
-void CConfigManager::registerLuaRef(int ref) {
-    m_heldLuaRefs.emplace_back(ref);
-}
-
-void CConfigManager::callLuaFn(int ref) {
-    lua_rawgeti(m_lua, LUA_REGISTRYINDEX, ref);
-
-    int status = guardedPCall(0, 0, 0, CConfigManager::LUA_TIMEOUT_KEYBIND_CALLBACK_MS, "keybind callback");
-
-    if (status != LUA_OK) {
-        addError(std::format("error in callLuaFn: {}", lua_tostring(m_lua, -1)));
-        lua_pop(m_lua, 1);
-    }
-}
-
-static SDispatchResult dispatchResultFromLua(lua_State* L, int idx) {
-    SDispatchResult result;
-
-    if (!lua_istable(L, idx))
-        return result;
-
-    lua_getfield(L, idx, "pass_event");
-    result.passEvent = lua_toboolean(L, -1);
-    lua_pop(L, 1);
-
-    lua_getfield(L, idx, "ok");
-    if (lua_isboolean(L, -1))
-        result.success = lua_toboolean(L, -1);
-    lua_pop(L, 1);
-
-    lua_getfield(L, idx, "request_release");
-    result.requestRelease = lua_toboolean(L, -1);
-    lua_pop(L, 1);
-
-    if (!result.success) {
-        lua_getfield(L, idx, "error");
-        if (lua_isstring(L, -1))
-            result.error = lua_tostring(L, -1);
-        lua_pop(L, 1);
-    }
-
-    return result;
-}
-
-SDispatchResult CConfigManager::callLuaFnBind(int ref) {
-    lua_rawgeti(m_lua, LUA_REGISTRYINDEX, ref);
-
-    int status = guardedPCall(0, 1, 0, CConfigManager::LUA_TIMEOUT_KEYBIND_CALLBACK_MS, "keybind callback");
-
-    if (status != LUA_OK) {
-        Config::Lua::Bindings::Internal::reportError(m_lua,
-                                                     Config::Actions::SActionError{std::format("error in keybind lambda: {}", luaL_tolstring(m_lua, -1, nullptr)),
-                                                                                   Config::Actions::eActionErrorLevel::ERROR, Config::Actions::eActionErrorCode::LUA_ERROR});
-        lua_pop(m_lua, 2);
-        return {.success = false, .error = "lua keybind error"};
-    }
-
-    auto result = dispatchResultFromLua(m_lua, -1);
-    lua_pop(m_lua, 1);
-    return result;
-}
-
-void CConfigManager::callLuaFn(int ref, const std::function<int(lua_State*)>& pushArgs, int timeoutMs, std::string_view context) {
-    if (ref == LUA_NOREF || ref == LUA_REFNIL)
-        return;
-
-    lua_rawgeti(m_lua, LUA_REGISTRYINDEX, ref);
-
-    const int nargs  = pushArgs ? pushArgs(m_lua) : 0;
-    const int status = guardedPCall(nargs, 0, 0, timeoutMs, context);
-
-    if (status != LUA_OK) {
-        addError(std::format("error in {}: {}", context, lua_tostring(m_lua, -1)));
-        lua_pop(m_lua, 1);
-    }
-}
-
-void CConfigManager::clearHeldLuaRefs() {
-    for (const auto& r : m_heldLuaRefs) {
-        luaL_unref(m_lua, LUA_REGISTRYINDEX, r);
-    }
-
-    m_heldLuaRefs.clear();
-}
-
 bool CConfigManager::isDynamicParse() const {
     return !m_isParsingConfig || m_isEvaluating;
 }
@@ -1462,6 +1339,14 @@ void CConfigManager::reregisterLuaPluginFns() {
     }
 }
 
+void CConfigManager::warnDeprecated(std::string what, std::string why) {
+    m_extraDeprecations.emplace_back(what, why);
+}
+
+void CConfigManager::clearDeprecations() {
+    m_extraDeprecations.clear();
+}
+
 std::vector<std::string> CConfigManager::deprecationNotices() const {
     std::vector<std::string> accum;
 
@@ -1474,6 +1359,9 @@ std::vector<std::string> CConfigManager::deprecationNotices() const {
 
         accum.emplace_back(std::format("{}: {}", v.first, *v.second->deprecationNotice()));
     }
+
+    for (const auto& v : m_extraDeprecations)
+        accum.emplace_back(std::format("{}: {}", v.first, v.second));
 
     return accum;
 }

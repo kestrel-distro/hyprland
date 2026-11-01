@@ -22,6 +22,7 @@ AlwaysBreakAfterDefinitionReturnType: None
 AlwaysBreakAfterReturnType: None
 AlwaysBreakBeforeMultilineStrings: false
 AlwaysBreakTemplateDeclarations: Yes
+BinPackLongBracedList: false
 BreakBeforeBraces: Attach
 BreakBeforeTernaryOperators: false
 BreakConstructorInitializers: AfterColon
@@ -33,6 +34,8 @@ FixNamespaceComments: false
 IncludeBlocks: Preserve
 IndentCaseLabels: true
 IndentWidth: 4
+OneLineFormatOffRegex: //<?[ \t]*clang-format[ \t]+off-one-line$
+PackArguments: {BinPack: UseBreakAfter, BreakAfter: 30}
 PointerAlignment: Left
 ReflowComments: false
 SortIncludes: false

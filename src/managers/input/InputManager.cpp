@@ -28,6 +28,7 @@
 #include "../../protocols/core/DataDevice.hpp"
 #include "../../protocols/core/Compositor.hpp"
 #include "../../protocols/InputCapture.hpp"
+#include "../../hotkeys/Manager.hpp"
 
 #include "../../devices/Mouse.hpp"
 #include "../../devices/VirtualPointer.hpp"
@@ -727,6 +728,11 @@ void CInputManager::onMouseButton(IPointer::SButtonEvent e, SP<IPointer> mouse) 
 
     PROTO::inputCapture->button(e.button, e.state);
 
+    if (Hotkeys::mgr()->onButton(e, mouse)) {
+        Keybinds::mgr()->onMouseEvent(e, mouse, PROTO::inputCapture->isCaptured());
+        return;
+    }
+
     if (PROTO::inputCapture->isCaptured()) {
         Keybinds::mgr()->onMouseEvent(e, mouse, true);
         if (e.state == WL_POINTER_BUTTON_STATE_RELEASED)
@@ -839,13 +845,14 @@ void CInputManager::setClickMode(eClickBehaviorMode mode) {
 void CInputManager::processMouseDownNormal(const IPointer::SButtonEvent& e, SP<IPointer> mouse) {
 
     // notify the keybind manager
-    static auto PPASSMOUSE        = CConfigValue<Config::INTEGER>("binds:pass_mouse_when_bound");
-    const auto  PASS              = Keybinds::mgr()->onMouseEvent(e, mouse);
-    static auto PFOLLOWMOUSE      = CConfigValue<Config::INTEGER>("input:follow_mouse");
-    static auto PRESIZEONBORDER   = CConfigValue<Config::INTEGER>("general:resize_on_border");
-    static auto PBORDERSIZE       = CConfigValue<Config::INTEGER>("general:border_size");
-    static auto PBORDERGRABEXTEND = CConfigValue<Config::INTEGER>("general:extend_border_grab_area");
-    const auto  BORDER_GRAB_AREA  = *PRESIZEONBORDER ? *PBORDERSIZE + *PBORDERGRABEXTEND : 0;
+    static auto PPASSMOUSE         = CConfigValue<Config::INTEGER>("binds:pass_mouse_when_bound");
+    const auto  PASS               = Keybinds::mgr()->onMouseEvent(e, mouse);
+    static auto PFOLLOWMOUSE       = CConfigValue<Config::INTEGER>("input:follow_mouse");
+    static auto PSWALLOWFOCUSCLICK = CConfigValue<Config::BOOL>("input:swallow_focus_click");
+    static auto PRESIZEONBORDER    = CConfigValue<Config::INTEGER>("general:resize_on_border");
+    static auto PBORDERSIZE        = CConfigValue<Config::INTEGER>("general:border_size");
+    static auto PBORDERGRABEXTEND  = CConfigValue<Config::INTEGER>("general:extend_border_grab_area");
+    const auto  BORDER_GRAB_AREA   = *PRESIZEONBORDER ? *PBORDERSIZE + *PBORDERGRABEXTEND : 0;
 
     if (!PASS && !*PPASSMOUSE)
         return;
@@ -889,6 +896,9 @@ void CInputManager::processMouseDownNormal(const IPointer::SButtonEvent& e, SP<I
                     m_currentlyHeldButtons = COPY;
                 } else
                     refocus();
+
+                if (*PSWALLOWFOCUSCLICK && Desktop::focusState()->window() == w)
+                    m_swallowedFocusButtons.emplace_back(e.button, mouse);
             }
 
             // if clicked on a floating window make it top
@@ -907,8 +917,16 @@ void CInputManager::processMouseDownNormal(const IPointer::SButtonEvent& e, SP<I
         case WL_POINTER_BUTTON_STATE_RELEASED: break;
     }
 
-    // notify app if we didn't handle it
-    g_pSeatManager->sendPointerButton(e.timeMs, e.button, e.state);
+    bool swallowed = false;
+    if (e.state == WL_POINTER_BUTTON_STATE_PRESSED)
+        swallowed = std::ranges::any_of(m_swallowedFocusButtons, [&](const auto& b) { return b.button == e.button && b.pointer == mouse; });
+    else
+        swallowed = std::erase_if(m_swallowedFocusButtons, [&](const auto& b) { return b.button == e.button && b.pointer == mouse; });
+
+    if (!swallowed) {
+        // notify app if we didn't handle it
+        g_pSeatManager->sendPointerButton(e.timeMs, e.button, e.state);
+    }
 
     if (const auto PMON = State::monitorState()->query().vec(mouseCoords).run(); PMON != Desktop::focusState()->monitor() && PMON)
         Desktop::focusState()->rawMonitorFocus(PMON);
@@ -978,6 +996,8 @@ void CInputManager::onMouseWheel(IPointer::SAxisEvent e, SP<IPointer> pointer) {
     else if (e.delta == 0)
         PROTO::inputCapture->axisStop(e.axis);
     PROTO::inputCapture->frame();
+
+    Hotkeys::mgr()->onAxis();
 
     const bool BIND_PASSES = Keybinds::mgr()->onAxisEvent(e, pointer);
     bool       passEvent   = !PROTO::inputCapture->isCaptured() && BIND_PASSES;
@@ -1559,6 +1579,7 @@ void CInputManager::destroyPointer(SP<IPointer> mouse) {
         it = m_currentlyHeldButtons.erase(it);
     }
     std::erase_if(m_pointers, [mouse](const auto& other) { return other == mouse; });
+    std::erase_if(m_swallowedFocusButtons, [mouse](const auto& b) { return b.pointer == mouse; });
 
     g_pSeatManager->setMouse(!m_pointers.empty() ? m_pointers.front() : nullptr);
 
@@ -1696,8 +1717,10 @@ void CInputManager::onKeyboardKey(const IKeyboard::SKeyEvent& event, SP<IKeyboar
 
     bool passEvent = DISALLOWACTION && !PROTO::inputCapture->isCaptured();
 
-    if (!DISALLOWACTION)
-        passEvent = Keybinds::mgr()->onKeyEvent(event, pKeyboard) && !PROTO::inputCapture->isCaptured();
+    if (!DISALLOWACTION) {
+        const bool HOTKEY_CONSUMED = Hotkeys::mgr()->onKey(event, pKeyboard);
+        passEvent                  = Keybinds::mgr()->onKeyEvent(event, pKeyboard) && !HOTKEY_CONSUMED && !PROTO::inputCapture->isCaptured();
+    }
 
     if (g_pSeatManager->m_keyboardEventHandlers.dispatch(event, pKeyboard, passEvent))
         return;
@@ -2180,6 +2203,7 @@ void CInputManager::releaseAllMouseButtons() {
     }
 
     m_currentlyHeldButtons.clear();
+    m_swallowedFocusButtons.clear();
 }
 
 void CInputManager::setCursorIconOnBorder(PHLWINDOW w) {
