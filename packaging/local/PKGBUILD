@@ -40,6 +40,7 @@ depends=(cairo # libcairo.so
          hyprutils libhyprutils.so
          hyprwire libhyprwire.so
          lcms2 liblcms2.so
+         libcanberra
          libdrm # libdrm.so
          libglvnd libEGL.so libGLESv2.so
          libinput # libinput.so
