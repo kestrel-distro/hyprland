@@ -41,6 +41,7 @@ depends=(cairo # libcairo.so
          hyprwire libhyprwire.so
          lcms2 liblcms2.so
          libcanberra
+         libdisplay-info
          libdrm # libdrm.so
          libglvnd libEGL.so libGLESv2.so
          libinput # libinput.so
@@ -53,6 +54,10 @@ depends=(cairo # libcairo.so
          libxrender
          lua # liblua.so
          mesa # libgbm.so
+         polkit
+         sdbus-c++
+         seatd
+         systemd-libs
          muparser # libmuparser.so
          opengl-driver
          pango libpango-1.0.so libpangocairo-1.0.so
