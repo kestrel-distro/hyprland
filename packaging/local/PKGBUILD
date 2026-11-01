@@ -55,7 +55,7 @@ depends=(cairo # libcairo.so
          lua # liblua.so
          mesa # libgbm.so
          polkit
-         sdbus-c++
+         sdbus-cpp
          seatd
          systemd-libs
          muparser # libmuparser.so
