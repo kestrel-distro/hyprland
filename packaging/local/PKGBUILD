@@ -20,7 +20,7 @@
 #   _kestrel_pgo     no (default) | generate | use   (see packaging/PGO.md)
 
 pkgname=hyprland-kestrel
-pkgver=0.56.2
+pkgver=0.57.0
 pkgrel=1
 pkgdesc='a highly customizable dynamic tiling Wayland compositor'
 arch=(x86_64)
@@ -93,21 +93,15 @@ options=(!debug)
 : "${_kestrel_pgo:=no}"
 : "${_kestrel_pgo_dir:=/tmp/hyprland.profdata}"
 
-_kestrel_branch="kestrel/0.56.2"
+_kestrel_branch="main"
 _archive="hyprland"
-source=("$_archive::git+https://github.com/kestrel-distro/hyprland.git#branch=$_kestrel_branch"
-        "0001-kestrel-sched-hint.patch")
-sha256sums=('SKIP'
-            'SKIP')
+source=("$_archive::git+https://github.com/kestrel-distro/hyprland.git#branch=$_kestrel_branch")
+sha256sums=('SKIP')
 
 prepare() {
 	cd "$_archive"
 	# The release tarball bundles these; a git checkout does not.
 	git submodule update --init --recursive
-	# The release branch predates the Kestrel scheduling hint.
-	if ! grep -q KestrelHint src/main.cpp; then
-		git apply "$srcdir/0001-kestrel-sched-hint.patch"
-	fi
 	# Drop the global -fno-lto so ThinLTO can be enabled. Plugins built through
 	# hyprpm are the reason upstream disables it; Kestrel builds with NO_HYPRPM.
 	sed -i '/add_compile_options(-fno-lto)/d' CMakeLists.txt
